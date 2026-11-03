@@ -130,7 +130,7 @@ export async function prepareMain(project, log) {
 }
 
 /** The folder with symlinks resolved, or itself when it can't be (gone, unreadable). */
-async function realPath(p) {
+export async function realPath(p) {
   try {
     const r = await exec("sh", ["-c", 'cd "$1" 2>/dev/null && pwd -P', "sh", p]);
     return r.code === 0 && out(r) ? out(r) : p;

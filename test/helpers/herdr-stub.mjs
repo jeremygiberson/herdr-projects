@@ -35,16 +35,23 @@ export const state = {
   hcRunHidesTab: false, // a labeled `hc run` never shows up as a tab
   renames: [],          // every `herdr-app do tab.rename`
   hcRunFails: false,    // `hc run` answers a non-zero code
+  agents: [],           // what agents() reports: { address, pane, space, tab }
+  panes: [],            // what panes() reports: { pane, terminal, tab, cwd, program: { shell, agent } }
+  notified: [],         // every notify(...)
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, closed: 0, platform: "linux", picked: null });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], closed: 0, platform: "linux", picked: null });
   for (const k of Object.keys(store)) delete store[k];
 }
 
 export const home = () => { count("home"); return state.home; };
 export const appHome = () => state.appHome;
-export const spaces = () => { count("spaces"); return state.spaces; };
+// A space has one tab with one pane and lives on this machine unless a test says otherwise.
+export const spaces = () => { count("spaces"); return state.spaces.map((s) => ({ machine: null, tabs: [{ id: `tb-${s.id}`, name: "1", panes: 1 }], ...s })); };
+export const agents = () => state.agents;
+export const panes = () => state.panes;
+export const notify = (n) => { state.notified.push(n); return `n${state.notified.length}`; };
 export const layouts = () => state.layoutNames ?? ["main"];
 export const layout = () => state.layout ?? null; // the shown layout tree; null is a layout without any of our blocks
 export const focused = () => state.focused;
@@ -87,7 +94,7 @@ export function run(command, args = {}) {
   state.runs.push({ command, args });
   if (command === "space.new") {
     const id = `sp${state.nextId++}`;
-    state.spaces.push({ id, name: args.name, folder: args.folder, machine: null });
+    state.spaces.push({ id, name: args.name, folder: args.folder, machine: null, tabs: [{ id: `tb-${id}`, name: "1", panes: 1 }] });
     // herdr moves focus to the new space only later: right after space.new focused() is still the old window
     state.focused ??= { space: "picker-space", pane: "picker-pane" };
     state.terminals.push({ address: `t${state.nextId++}`, cwd: args.folder, state: "live", status: state.agentStatus, agent: args.argv?.[0] ?? null, argv: args.argv ?? [] });

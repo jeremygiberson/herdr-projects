@@ -268,6 +268,10 @@ export function matchAutoLayout(entries, repo, branch) {
   return best;
 }
 
+/** A repo's name from its key (the real path of its common git dir): the folder holding `.git`; for a
+ *  common dir not named `.git` (a bare repo, a custom GIT_DIR), the space's own folder name. */
+export const repoNameFromKey = (key, folder) => basename(/[\\/]\.git$/.test(key) ? key.slice(0, -5) : folder);
+
 /** The tabs for a space opened outside the picker: a known project's own, else the entry's layout. An agent pane
  *  left empty takes `defaultAgent`, else is a shell. Throws `No layout called "<name>"`. */
 export function tabsForAuto({ project, layouts, entry, defaultAgent }) {
