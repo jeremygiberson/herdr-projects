@@ -34,10 +34,11 @@ export const state = {
   labeledTabs: [],      // tabs a labeled `hc run` adds to a space: { space, tab }
   hcRunHidesTab: false, // a labeled `hc run` never shows up as a tab
   renames: [],          // every `herdr-app do tab.rename`
+  hcRunFails: false,    // `hc run` answers a non-zero code
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], closed: 0, platform: "linux", picked: null });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, closed: 0, platform: "linux", picked: null });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -110,14 +111,20 @@ function hcNow(args) {
   if (cmd === "ls") return ok(JSON.stringify({ terminals: [...state.terminals].reverse() })); // newest first: the worst case for picking "the new one"
   if (cmd === "get") {
     const t = state.terminals.find((x) => x.address === rest[0]);
-    return t ? ok(JSON.stringify({ ...t, foreground: { name: state.foreground } })) : { code: 3, stdout: "", stderr: "not_found\n" };
+    // Unlike `ls`, `get` prints the agent status as an object ({ app, state }) or null; its own `state` is live/exited.
+    const status = t?.status ? { app: t.agent ?? "agent", state: t.status } : null;
+    return t ? ok(JSON.stringify({ ...t, status, foreground: { name: state.foreground } })) : { code: 3, stdout: "", stderr: "not_found\n" };
   }
   if (cmd === "send") {
-    state.sent.push({ terminal: rest[0], text: rest[1] });
+    // Like the real hc, a text starting with "-" is read as an option unless it comes after "--".
+    const [terminal, ...words] = rest;
+    if (words[0] !== "--" && String(words[0] ?? "").startsWith("-")) return { code: 2, stdout: "", stderr: `unknown option ${words[0]}\n` };
+    state.sent.push({ terminal, text: words[0] === "--" ? words[1] : words[0] });
     return state.sendFails ? { code: 1, stdout: "", stderr: "send failed\nmore" } : ok("{}");
   }
   if (cmd === "run") {
     state.hcRuns.push({ args });
+    if (state.hcRunFails) return { code: 1, stdout: "", stderr: "no such space\nmore" };
     // herdr shows a terminal labeled herdr.space/herdr.tab as that tab in that space
     const label = (k) => args.find((a, i) => args[i - 1] === "--label" && a.startsWith(k + "="))?.slice(k.length + 1);
     if (!state.hcRunHidesTab && label("herdr.space") && label("herdr.tab")) state.labeledTabs.push({ space: label("herdr.space"), tab: label("herdr.tab") });

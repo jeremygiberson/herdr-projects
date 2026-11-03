@@ -340,9 +340,10 @@ export function setupChain({ steps, vars, env, folder, marker }) {
   return [...exports, chain].join("; ");
 }
 
-/** The chain, then the agent in place of the shell; any failure leaves a shell open. "" without a chain. */
-export const chainThenAgent = (chain, argv, prompt) =>
-  chain ? `${chain} && exec ${argv.map(shq).join(" ")}${prompt ? " " + shq(prompt) : ""} || exec "$SHELL"` : "";
+/** The chain, then the agent in place of the shell, started in `dir` (its own pane's folder: the chain ends in the
+ *  setup folder); any failure leaves a shell open. "" without a chain. */
+export const chainThenAgent = (chain, argv, prompt, dir) =>
+  chain ? `${chain}${dir ? ` && cd ${shq(dir)}` : ""} && exec ${argv.map(shq).join(" ")}${prompt ? " " + shq(prompt) : ""} || exec "$SHELL"` : "";
 
 /** The chain alone; a shell takes over when it ends or fails. */
 export const chainAlone = (chain) => `${chain} || exec "$SHELL"`;

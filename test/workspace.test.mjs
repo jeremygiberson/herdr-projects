@@ -1,7 +1,7 @@
 import "./helpers/setup.mjs";
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { makeRepo, scratch } from "./helpers/repo.mjs";
 
@@ -228,6 +228,14 @@ test("when the new space can't be found, the later tabs are skipped rather than 
   await build(project(dir, { startup: { agent: "claude", tabs: ["npm test", "lazygit"] } }), dir, "Demo");
   assert.equal(spaceNews().length, 1);
   assert.deepEqual(state.tabsMade, []);
+  // with a setup chain beside the agent, the busy screen says setup did not start rather than that it runs
+  reset(); state.appLsHidesSpaces = true;
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  const notes = [];
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "with", chain: "true", log: (m) => notes.push(m) });
+  assert.ok(notes.includes("setup did not start: couldn't find the new space"), notes.join(" | "));
+  assert.ok(!notes.includes("setup runs in the setup tab"));
+  assert.equal(state.hcRuns.length, 0);
 });
 
 test("after timing: the agent pane runs the chain and execs the agent with its arg prompt; no task is passed", async () => {
@@ -237,7 +245,7 @@ test("after timing: the agent pane runs the chain and execs the agent with its a
   await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "fix it", agentTiming: "after", chain: `cd '${dir}' && npm ci`, log: (m) => notes.push(m) });
   const sn = state.runs.find((r) => r.command === "space.new").args;
   assert.deepEqual(sn.argv.slice(0, 2), ["sh", "-c"]);
-  assert.match(sn.argv[2], /npm ci && exec 'claude' '--model' 'opus' 'fix it' \|\| exec "\$SHELL"$/);
+  assert.ok(sn.argv[2].endsWith(`npm ci && cd '${dir}' && exec 'claude' '--model' 'opus' 'fix it' || exec "$SHELL"`), sn.argv[2]);
   assert.equal(sn.task, undefined);
   assert.ok(notes.includes("setup continues in the agent pane"));
   assert.equal(state.hcRuns.length, 0);
@@ -291,4 +299,33 @@ test("a setup tab that never shows up is not renamed, and the launch still finis
   assert.equal(state.hcRuns.length, 1);
   assert.deepEqual(state.renames, []);
   assert.ok(notes.includes("setup runs in the setup tab"));
+});
+test("with timing: an hc run that fails says setup did not start, with hc's error", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  state.hcRunFails = true;
+  const notes = [];
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "with", chain: "true", log: (m) => notes.push(m) });
+  assert.ok(notes.includes("setup did not start: no such space"), notes.join(" | "));
+  assert.ok(!notes.includes("setup runs in the setup tab"));
+});
+test("after timing: the agent starts in its own pane's folder, not the chain's", async () => {
+  const dir = realpathSync(makeRepo()); mkdirSync(join(dir, "backend"));
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude", folder: "backend" }] }] } });
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "after", chain: `cd '${dir}' && true`, log: () => {} });
+  const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
+  assert.ok(line.includes(`cd '${dir}/backend' && exec 'claude'`), line);
+});
+test("send mode types a prompt starting with - after --", async () => {
+  const dir = repo();
+  await build(project(dir, { startup: { agent: "hermes", prompt: "-x foo", promptMode: "send" } }), dir, "Demo");
+  assert.deepEqual(state.sent, [{ terminal: "t2", text: "-x foo" }]);
+});
+test("after timing with a send prompt removes the prompt file when the helper can't start", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "hermes", promptMode: "send" }] }] } });
+  state.hcRunFails = true;
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "go", agentTiming: "after", chain: "true", log: () => {} });
+  const run = state.hcRuns[0].args;
+  assert.equal(existsSync(run[run.length - 2]), false);
 });
