@@ -455,3 +455,11 @@ test("existing shell space whose shell never comes to the front: the line is ski
   assert.equal(state.splits[0].pane, "paneX");
   assert.ok(errors.some((e) => /couldn't type into the new space's shell/.test(e)), errors.join(" | "));
 });
+test("a worktree launch that opens the repo's space first marks both folders as opening", async () => {
+  const dir = repo(); const wt = realpathSync(scratch("pp-wt"));
+  const started = Date.now();
+  await build(project(dir, { worktree: { repoSpace: true } }), wt, "Demo · x");
+  assert.deepEqual(spaceNews().map((r) => r.args.folder), [dir, wt]);
+  const opening = shared("projects.opening");
+  for (const f of [dir, wt]) assert.ok(opening[f] >= started && opening[f] <= Date.now(), `${f}: ${JSON.stringify(opening)}`);
+});

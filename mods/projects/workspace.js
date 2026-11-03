@@ -274,13 +274,18 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     const spacesBefore = new Set(spaces().map((s) => s.id));
     const known = send ? new Set((await liveTerminals()).map((t) => t.address)) : null;
     // The resident watcher skips a space for a folder the picker is opening (entries go stale after 5 min).
-    const now = Date.now();
-    const opening = Object.fromEntries(Object.entries(shared("projects.opening") ?? {}).filter(([, at]) => now - at < 5 * 60000));
-    setShared("projects.opening", { ...opening, [dirs[0][0]]: now });
+    // The repo's own space, when this launch opens it first, is marked too.
+    const markOpening = (dir) => {
+      const now = Date.now();
+      const opening = Object.fromEntries(Object.entries(shared("projects.opening") ?? {}).filter(([, at]) => now - at < 5 * 60000));
+      setShared("projects.opening", { ...opening, [dir]: now });
+    };
+    markOpening(dirs[0][0]);
     // Herdr nests a worktree's space under its repo's own space, but only while that one is open.
     const main = projectFolder(project);
     if (project.worktree.repoSpace && folder !== main && !findSpace(project)) {
       diag("debug", "opening the repo's space first", { main });
+      markOpening(main);
       run("space.new", { name: project.name, folder: main });
     }
     const firstArgv = argvOf(0, 0);
