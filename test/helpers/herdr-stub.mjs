@@ -31,11 +31,13 @@ export const state = {
   tabsMade: [],         // every `herdr-app do tab.new`
   appLsHidesSpaces: false, // `herdr-app ls` lists no spaces (a new space is never found)
   hcRuns: [],           // every `hc run …`
+  labeledTabs: [],      // tabs a labeled `hc run` adds to a space: { space, tab }
+  hcRunHidesTab: false, // a labeled `hc run` never shows up as a tab
   renames: [],          // every `herdr-app do tab.rename`
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], renames: [], closed: 0, platform: "linux", picked: null });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], closed: 0, platform: "linux", picked: null });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -50,7 +52,7 @@ export function exec(command, args = [], options = {}) {
   // The real herdr-app would split the person's window: answer like it, and record the request.
   if (command === "herdr-app") {
     if (args[0] === "ls") {
-      const spaces = (state.appLsHidesSpaces ? [] : state.spaces).map((s) => ({ ...s, tabs: [{ id: `tb-${s.id}`, terminals: [{ terminal: `t-${s.id}`, pane: `pane-of-${s.id}` }] }, ...state.tabsMade.map((t, i) => ({ t, tab: `tab-${i + 1}` })).filter(({ t }) => t.space === s.id).map(({ tab }) => ({ id: tab, terminals: [{ terminal: `t-${tab}`, pane: `pane-of-${tab}` }] }))] }));
+      const spaces = (state.appLsHidesSpaces ? [] : state.spaces).map((s) => ({ ...s, tabs: [{ id: `tb-${s.id}`, terminals: [{ terminal: `t-${s.id}`, pane: `pane-of-${s.id}` }] }, ...state.tabsMade.map((t, i) => ({ t, tab: `tab-${i + 1}` })).filter(({ t }) => t.space === s.id).map(({ tab }) => ({ id: tab, terminals: [{ terminal: `t-${tab}`, pane: `pane-of-${tab}` }] })), ...state.labeledTabs.filter((l) => l.space === s.id).map((l, i) => ({ id: l.tab, terminals: [{ terminal: `t-${l.tab}`, pane: `pane-of-${l.tab}-${i}` }] }))] }));
       return Promise.resolve({ code: 0, stdout: JSON.stringify({ spaces }), stderr: "" });
     }
     const [, name, json] = args;
@@ -116,6 +118,9 @@ function hcNow(args) {
   }
   if (cmd === "run") {
     state.hcRuns.push({ args });
+    // herdr shows a terminal labeled herdr.space/herdr.tab as that tab in that space
+    const label = (k) => args.find((a, i) => args[i - 1] === "--label" && a.startsWith(k + "="))?.slice(k.length + 1);
+    if (!state.hcRunHidesTab && label("herdr.space") && label("herdr.tab")) state.labeledTabs.push({ space: label("herdr.space"), tab: label("herdr.tab") });
     return ok(JSON.stringify({ address: `t-run-${state.hcRuns.length}` }));
   }
   return { code: 1, stdout: "", stderr: `unsupported: ${cmd}` };

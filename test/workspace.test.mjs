@@ -266,6 +266,9 @@ test("with timing runs the chain in a setup terminal beside the agent, which sta
   const viaTab = state.tabsMade.find((t) => t.name === "setup");
   const line = viaHc ? viaHc.args.at(-1) : viaTab?.argv?.[2];
   assert.match(line ?? "", /^true \|\| exec "\$SHELL"$/);
+  const tabId = viaHc.args.find((a) => a.startsWith("herdr.tab=")).slice("herdr.tab=".length);
+  assert.match(tabId, /^setup-\d+$/);
+  assert.deepEqual(state.renames, [{ id: tabId, name: "setup" }]);
 });
 test("after timing with no chain behaves like with; no agent with a chain runs it in the setup terminal", async () => {
   const dir = realpathSync(makeRepo());
@@ -276,5 +279,15 @@ test("after timing with no chain behaves like with; no agent with a chain runs i
   const q = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "s" }] } });
   const notes = [];
   await W.buildWorkspace({ project: q, folder: dir, name: "S", tabs: q.startup.tabs, prompt: "", agentTiming: "after", chain: "true", log: (m) => notes.push(m) });
+  assert.ok(notes.includes("setup runs in the setup tab"));
+});
+test("a setup tab that never shows up is not renamed, and the launch still finishes", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  state.hcRunHidesTab = true;
+  const notes = [];
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "with", chain: "true", log: (m) => notes.push(m) });
+  assert.equal(state.hcRuns.length, 1);
+  assert.deepEqual(state.renames, []);
   assert.ok(notes.includes("setup runs in the setup tab"));
 });

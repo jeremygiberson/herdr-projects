@@ -115,12 +115,26 @@ async function appDo(command, args, what) {
   return made;
 }
 
+/** Whether `herdr-app ls` shows tab `tab` in `space`, waiting up to 3 s for it to appear. */
+async function tabShown(space, tab) {
+  for (let i = 0; i < 12; i++) {
+    try {
+      const r = await exec("herdr-app", ["ls"]);
+      const s = (JSON.parse(r.stdout || "{}").spaces ?? []).find((x) => x.id === space);
+      if (s?.tabs?.some((t) => t.id === tab)) return true;
+    } catch {}
+    await sleep(0.25);
+  }
+  return false;
+}
+
 /** Runs the setup chain in its own tab of `space` (a labeled `hc run`, which herdr shows as a tab there),
  *  named "setup"; the tab closes when the chain succeeds and stays at a shell when it fails. */
 async function startSetupTerminal(space, folder, chain) {
   const tabId = `setup-${Date.now()}`;
   const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--cwd", folder, "--label", "herdr.space=" + space, "--label", "herdr.tab=" + tabId, "--", "sh", "-c", chainAlone(chain)]);
   if (r.code !== 0) return diag("error", `couldn't start the setup terminal: ${r.stderr.split("\n")[0]}`, { space, folder });
+  if (!(await tabShown(space, tabId))) return diag("error", "setup tab not renamed: it never showed up", { space, tab: tabId });
   await appDo("tab.rename", { id: tabId, name: "setup" }, "the setup tab");
 }
 
