@@ -463,9 +463,12 @@ export default class ProjectPresets extends View {
           this.dismiss();
           return run("space.select", { id: existing.id });
         }
-        const { folder, name, chain, steps } = await this.prepareLaunch(p, { worktree, branchText }, log);
+        const { folder, name, chain, steps, mark } = await this.prepareLaunch(p, { worktree, branchText }, log);
         const quick = p.startup.quickSetup;
-        if (quick) await runInline(steps, folder, log);
+        if (quick && await runInline(steps, folder, log) && mark) {
+          await excludeMarker(folder);
+          await exec("touch", [markerPath(folder)]);
+        }
         setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
         const first = firstAgent(p.startup.tabs)?.pane;
         if (prompt && first?.promptMode === "send" && agentTiming === "with") log("Waiting for the agent to be ready for its prompt…");
@@ -500,7 +503,7 @@ export default class ProjectPresets extends View {
     const chain = setupChain({ steps: raw, vars, env, folder: wt.folder, marker });
     if (marker) await excludeMarker(wt.folder);
     note(raw);
-    return { folder: wt.folder, name: worktreeSpaceName(p, wt), steps: raw.map((s) => expand(s, vars)), chain };
+    return { folder: wt.folder, name: worktreeSpaceName(p, wt), steps: raw.map((s) => expand(s, vars)), chain, mark: isNew && raw.length > 0 };
   }
 
   // ---- editor -----------------------------------------------------------
@@ -1439,9 +1442,10 @@ async function runInline(steps, folder, log) {
     log(`$ ${step}`);
     try {
       const r = await exec("sh", ["-c", step], { cwd: folder });
-      if (r.code !== 0) return log(`setup failed (${r.code}): ${step}`);
+      if (r.code !== 0) return log(`setup failed (${r.code}): ${step}`), false;
     } catch {
-      return log(`setup stopped (timed out or couldn't start): ${step}`);
+      return log(`setup stopped (timed out or couldn't start): ${step}`), false;
     }
   }
+  return true;
 }

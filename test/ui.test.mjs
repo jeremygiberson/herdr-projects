@@ -1603,3 +1603,16 @@ test("a slash in the branch box is used verbatim", async () => {
   v.nameInput.set_value("feat/x"); enter(v); await cx.settle();
   assert.match(state.runs.find((r) => r.command === "space.new").args.name, /feat\/x/);
 });
+test("quickSetup on a new worktree marks it too, so the worktree setup runs once", async () => {
+  const dir = realpathSync(makeRepo()); const root = scratch("pp-wt");
+  const over = (path, mode) => proj("api", path, { worktree: { mode, setup: ["touch wt.txt"], branchTemplate: "{slug}", root: `${root}/{branch}` }, startup: { setup: ["touch st.txt"], quickSetup: true, agentTiming: "after", ...AG("claude") } });
+  let { v, cx } = await open([over(dir, "always")]);
+  enter(v); await cx.settle();
+  const wt = state.runs.find((r) => r.command === "space.new").args.folder;
+  for (const f of ["wt.txt", "st.txt", ".projects-setup-done"]) assert.equal(existsSync(join(wt, f)), true, f);
+  rmSync(join(wt, "wt.txt")); rmSync(join(wt, "st.txt"));
+  ({ v, cx } = await open([over(wt, "never")]));
+  enter(v); await cx.settle();
+  assert.equal(existsSync(join(wt, "st.txt")), true);
+  assert.equal(existsSync(join(wt, "wt.txt")), false);
+});
