@@ -33,7 +33,7 @@ Projects live in `~/.config/herdr-app/data/projects.json`; the editor writes it,
             { "type": "agent", "agent": "claude", "args": "--model opus", "prompt": "", "promptMode": "arg" },
             { "type": "shell", "direction": "down" } ] },
         { "name": "web", "folder": "frontend", "command": "npm run dev" },
-        { "name": "api", "folder": "backend", "panes": [ { "command": "make run" }, { "command": "psql shop", "direction": "right", "folder": "../db" } ] },
+        { "name": "api", "folder": "backend", "panes": [ { "command": "make run" }, { "command": "psql shop", "direction": "right", "folder": "db" } ] },
         { "name": "git", "command": "lazygit" }
       ]
     }

@@ -219,7 +219,8 @@ export default class ProjectPresets extends View {
       this.openBackup();
       if (d.text) this.backupPath.set_value(d.text);
       if (d.note) this.backupNote = { text: d.note, bad: Boolean(d.bad) };
-    } else if (d.view === "delete") this.pendingDelete = project;
+    } else if (d.view === "launch") this.activate(false); // Enter on the named project, for checking a launch in the app
+    else if (d.view === "delete") this.pendingDelete = project;
     else if (d.view === "name") {
       this.target = project;
       this.askName(project);

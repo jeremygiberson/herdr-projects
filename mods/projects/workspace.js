@@ -122,7 +122,8 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, log 
   const plan = tabPlan(tabs);
   const env = await readEnv();
 
-  const dirs = plan.map((t) => t.panes.map((p) => resolveFolder(folder, p.folder || t.folder, home(), env)));
+  // A pane's folder is relative to its tab's folder, which is relative to the project folder.
+  const dirs = plan.map((t) => { const tabDir = resolveFolder(folder, t.folder, home(), env); return t.panes.map((p) => resolveFolder(tabDir, p.folder, home(), env)); });
   const exists = new Map();
   for (const [ti, t] of plan.entries()) {
     for (const [pi, dir] of dirs[ti].entries()) {
@@ -175,7 +176,7 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, log 
     const firstArgv = argvOf(0, 0);
     diag("debug", "launch", { folder, name, argv: firstArgv, tabs: plan.length });
     run("space.new", {
-      name, folder: dirs[0][0],
+      name, folder: dirs[0][0], tab: plan[0].name,
       ...(firstArgv.length ? { argv: firstArgv, ...(arg && isLead(0, 0) ? { task: prompt } : {}) } : {}),
     });
     // focused() can still be the window the picker was opened from just after space.new, so the new

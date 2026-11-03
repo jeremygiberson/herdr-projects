@@ -1495,3 +1495,10 @@ test("a demo file can open the editor on a given tab and pane", async () => {
   v.applyDemo({ view: "edit", project: "shop", section: "startup", tab: 1, pane: 1 });
   assert.deepEqual([v.mode, v.section, v.tabAt, v.paneAt], ["edit", "startup", 1, 1]);
 });
+
+test("a demo file can launch the named project", async () => {
+  const dir = realpathSync(makeRepo()); mkdirSync(join(dir, "web"));
+  const { v, cx } = await open([proj("shop", dir, { worktree: { mode: "never" }, startup: { tabs: [{ name: "a" }, { name: "web", folder: "web", command: "top" }] } })]);
+  v.applyDemo({ view: "launch", project: "shop" }); await cx.settle();
+  assert.deepEqual(state.tabsMade.map((t) => t.name), ["web"]);
+});

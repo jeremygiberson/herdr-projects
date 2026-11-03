@@ -29,14 +29,14 @@ const repo = () => realpathSync(makeRepo());
 test("launch without an agent opens a bare space", async () => {
   const dir = repo();
   await build(project(dir), dir, "Demo");
-  assert.deepEqual(spaceNews().map((r) => r.args), [{ name: "Demo", folder: dir }]);
+  assert.deepEqual(spaceNews().map((r) => r.args), [{ name: "Demo", folder: dir, tab: "shell" }]);
 });
 
 test("launch in 'arg' mode hands the prompt to herdr as the task", async () => {
   const dir = repo();
   const p = project(dir, { startup: { agent: "claude", args: "--model opus", prompt: "fix it" } });
   await build(p, dir, "Demo");
-  assert.deepEqual(spaceNews()[0].args, { name: "Demo", folder: dir, argv: ["claude", "--model", "opus"], task: "fix it" });
+  assert.deepEqual(spaceNews()[0].args, { name: "Demo", folder: dir, tab: "agent", argv: ["claude", "--model", "opus"], task: "fix it" });
   assert.deepEqual(state.sent, []);
 });
 
@@ -52,7 +52,7 @@ test("launch in 'send' mode starts the agent bare and types the prompt once it i
   const dir = repo();
   const p = project(dir, { startup: { agent: "hermes", prompt: "review x", promptMode: "send" } });
   await build(p, dir, "Demo");
-  assert.deepEqual(spaceNews()[0].args, { name: "Demo", folder: dir, argv: ["hermes"] });
+  assert.deepEqual(spaceNews()[0].args, { name: "Demo", folder: dir, tab: "agent", argv: ["hermes"] });
   assert.deepEqual(state.sent, [{ terminal: "t2", text: "review x" }]);
 });
 
@@ -176,6 +176,13 @@ test("a multi-tab project opens each later tab in its own folder with its comman
   assert.deepEqual(state.tabsMade.map((t) => [t.name, t.folder, t.argv]), [["web", `${dir}/web`, ["sh", "-c", "npm run dev"]], ["api", `${dir}/api`, ["sh", "-c", "make run"]]]);
   assert.equal(state.splits.length, 1);
   assert.equal(state.splits[0].argv[4], `${dir}/api`);
+  assert.equal(state.runs.find((r) => r.command === "space.new").args.tab, "agent", "the first tab is named too");
+});
+test("a pane's folder is relative to its tab's folder", async () => {
+  const dir = realpathSync(makeRepo()); mkdirSync(join(dir, "backend/db"), { recursive: true });
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "api", folder: "backend", panes: [{ command: "a" }, { command: "b", direction: "right", folder: "db" }] }] } });
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", log: () => {} });
+  assert.equal(state.splits[0].argv[4], `${dir}/backend/db`);
 });
 test("a missing tab or pane folder stops the launch before any space is made, naming it", async () => {
   const dir = realpathSync(makeRepo());
