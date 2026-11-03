@@ -508,3 +508,11 @@ test("defaultTemplate, duplicateProject and startFromTemplate use the tab model"
   assert.equal(duplicateProject(t, []).startup.tabs[0].panes[0].agent, "claude");
   assert.equal(startFromTemplate(t).startup.tabs.length, 1);
 });
+
+test("tabPlan treats the empty direction normalize fills in as unset: down", () => {
+  const p = normalize({ path: "/a", startup: { tabs: [{ name: "a", panes: [{ type: "agent", agent: "claude" }, { type: "shell" }] }] } });
+  assert.equal(p.startup.tabs[0].panes[1].direction, "");
+  assert.equal(tabPlan(p.startup.tabs)[0].panes[1].direction, "down");
+  const side = tabsForLaunch(p, [{ name: "two", panes: [{ type: "agent" }, { type: "shell" }] }], "two");
+  assert.equal(tabPlan(side)[0].panes[1].direction, "down");
+});

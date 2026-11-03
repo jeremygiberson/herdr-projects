@@ -238,7 +238,7 @@ export function tabPlan(tabs) {
       let direction = "";
       let from = "";
       if (i > 0) {
-        direction = x?.direction ?? "down";
+        direction = x?.direction || "down";
         if (!["right", "down"].includes(direction)) throw new Error(`Tab "${name}": pane "${pname}" needs direction "right" or "down"`);
         from = x?.from || seen[seen.length - 1];
         if (!seen.includes(from)) throw new Error(`Tab "${name}": pane "${pname}" splits "${from}", which does not come before it`);
