@@ -33,7 +33,9 @@ export class Watcher {
    *  space is only marked seen: the active copy handles it, and it is never picked up later. So is one that appears
    *  while this computer's layout is still loading: those are the spaces the app restores at start. */
   tick(cx) {
-    const active = this.active() && machines().find((m) => m.name === null)?.layout === "ready";
+    // Only an explicit loading/unavailable holds back: a host that doesn't list this computer counts as ready.
+    const local = machines().find((m) => m.name === null);
+    const active = this.active() && (!local || local.layout === "ready");
     for (const space of spaces()) {
       if (this.seen.has(space.id)) continue;
       this.seen.add(space.id);

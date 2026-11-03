@@ -405,3 +405,13 @@ test("a build with problems says so in its toast; a build skipped under the lock
   assert.equal(two.rec.builds.length, 1);
   assert.deepEqual(state.notified, []);
 });
+
+test("with no entry for this computer in machines(), new spaces are built", async () => {
+  const dir = makeRepo();
+  state.machines = [];
+  const { w, cx, rec, tick } = harness({ projects: [apiProject(dir)] });
+  w.start(cx);
+  addSpace("s1", dir);
+  await tick();
+  assert.deepEqual(rec.builds.map((b) => b.existing.space), ["s1"]);
+});
