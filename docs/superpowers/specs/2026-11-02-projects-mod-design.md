@@ -70,7 +70,7 @@ One JSON file, `data/projects.json`, hand-editable, written with the expected-pr
             { "type": "agent", "agent": "claude", "args": "--model opus", "prompt": "", "promptMode": "arg" },
             { "type": "shell", "direction": "down" } ] },
         { "name": "web", "folder": "frontend", "command": "npm run dev" },
-        { "name": "api", "folder": "backend", "panes": [ { "command": "make run" }, { "command": "psql shop", "direction": "right", "folder": "../db" } ] },
+        { "name": "api", "folder": "backend", "panes": [ { "command": "make run" }, { "command": "psql shop", "direction": "right", "folder": "db" } ] },
         { "name": "git", "command": "lazygit" }
       ]
     }
@@ -81,7 +81,7 @@ One JSON file, `data/projects.json`, hand-editable, written with the expected-pr
 ### 4.1 Tabs and panes
 
 - A tab has `name`, optional `folder` (relative to the project folder or the worktree, or absolute; `~` and `$VAR` expand), and either `command` or `panes`, not both. Neither means a plain shell.
-- A pane has `type` (`agent` | `shell` | `command`; inferred when absent: `agent` field means agent, `command` means command, else shell), `command`, `direction` (`right` | `down`, default `down`), `from` (an earlier pane's name to split instead of the previous one), `folder` (default the tab's).
+- A pane has `type` (`agent` | `shell` | `command`; inferred when absent: `agent` field means agent, `command` means command, else shell), `command`, `direction` (`right` | `down`, default `down`), `from` (an earlier pane's name to split instead of the previous one), `folder` (default the tab's; a relative pane folder resolves against the tab's folder, so `"db"` under a tab in `backend` is `backend/db`).
 - The first tab is just a tab. An agent is a pane type; the agent pane may be anywhere. Several agent panes are allowed. The launch screen's prompt and the `after` setup chain go to the first one; later agent panes start bare, at once.
 - An agent pane carries its own `agent`, `args`, `promptMode`. In a named `panes` layout an agent pane may leave `agent` empty: inside a project it then inherits the project's first agent pane's settings; in a non-project repo (the `autoLayouts` list, 6) it uses the file's top-level `"defaultAgent": { "agent": "claude", "args": "" }`, or a plain shell when that is absent.
 - Every folder is checked to exist before anything is created. A missing one is reported on the busy screen and nothing opens.
