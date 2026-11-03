@@ -112,7 +112,7 @@ The prompt is always optional. A project's stored `prompt` is only the prefill o
 
 **How `after` works:** the setup chain and the agent share the agent's pane. The agent pane's `argv` is one shell line: `<chain> && exec <agent command and args> [prompt]`. Setup output scrolls by in the pane, and when the last step succeeds the agent takes it over, prompt included for `arg` mode. If a step fails the pane drops into a shell with the output above it and no agent starts. Nothing has to survive the popup, pane order is stable, and there is one space-creation path. For `send` mode behind setup, the prompt still needs typing once the agent is idle: the mod starts a detached helper, `hc run --bg --rm --no-parent --no-notify -- sh -c '<poll hc ls --json for the agent pane idle, then hc send>'`, which outlives the popup. The helper is a shell script shipped in the mod folder.
 
-**How `with` works:** the agent pane starts the agent at once (`argv` and `task` on `space.new`, as today); the setup chain runs in a separate tab named "setup" started with `hc run --cwd <folder> --label herdr.space=<id> --label herdr.tab=<id> --rm`. Its pane closes by itself on success and stays at a shell on failure.
+**How `with` works:** the agent pane starts the agent at once (`argv` and `task` on `space.new`, as today); the setup chain runs in a separate tab named "setup" started with `hc run --cwd <folder> --label herdr.space=<id> --label herdr.tab=<id> --rm`. It is a background `hc run --bg --rm --no-parent --no-notify` with labels `herdr.space=<id>` and `herdr.tab=setup-<timestamp>`, renamed "setup" with `tab.rename` once herdr shows it; it vanishes on success and stays at a shell on failure.
 
 ## 5. The launch screen
 
@@ -120,7 +120,7 @@ Enter on a project no longer launches straight away unless the project has `"qui
 
 - **Branch** (worktree modes only): the branch-name box with the live preview, as today. A typed name containing `/` is used verbatim instead of the template.
 - **Open as**: Worktree / Checkout, defaulted from `worktree.mode` (`never` → Checkout). Shift+Enter still means Checkout.
-- **Prompt**: a multi-line box, prefilled from the project's prompt. Empty is fine. Shift+Enter inserts a newline here (so on this screen Checkout is the Open as toggle, not Shift+Enter); Enter anywhere on the screen launches.
+- **Prompt**: a multi-line box, prefilled from the project's prompt. Empty is fine. Plain Enter inserts a newline here (Shift+Enter and Cmd+Enter do the same, so on this screen Checkout is the Open as toggle); **ctrl+Enter** launches from anywhere on the screen, and Enter in the branch box also launches.
 - **Agent**: `after setup` / `with setup`, defaulted from `agentTiming`, one key toggles (proposal: `ctrl+alt+T`, ⌘⌥T). Hidden when the project has no setup commands for this launch (then it is always "with").
 - **Layout**: the current ctrl+alt+L selector.
 - Enter launches; `alt+b` (⌘⌥B) goes back; Esc closes the popup.
@@ -191,7 +191,7 @@ Each phase: `node --test test/`, `herdr-app check` on both mods, a run in the ap
 - Only one project per repo can have `autoLayout`; saving enforces it.
 - A marker file decides "new worktree" for `worktree.setup`; its name is excluded via `.git/info/exclude`; a pre-existing worktree counts as new on first open; `copy` never overwrites.
 - Agent panes in layouts inherit the project's first agent, or a top-level `defaultAgent`, or become a shell.
-- Shift+Enter is a newline in the prompt box; Checkout on the launch screen is the Open as toggle.
+- Enter is a newline in the prompt box and ctrl+Enter launches; Checkout on the launch screen is the Open as toggle.
 - Shared code lives in `mods/projects/` and the launcher imports it across folders (to verify), with a shared-state lock between the mods.
 - Multi-line boxes replace `;;` in the editor.
 - `ctrl+alt+T` / ⌘⌥T toggles agent timing on the launch screen.
