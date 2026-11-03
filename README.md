@@ -16,7 +16,7 @@ Then merge `keys.json` into `~/.config/herdr-app/keys.json`.
 ## Development
 
 ```bash
-node --test test/
+node --test test/*.test.mjs
 herdr-app check mods/projects
 cp ~/.config/herdr-app/gpui-kit.d.ts ~/.config/herdr-app/herdr.d.ts mods/projects/
 cp ~/.config/herdr-app/gpui-kit.d.ts ~/.config/herdr-app/herdr.d.ts mods/projects-launcher/
