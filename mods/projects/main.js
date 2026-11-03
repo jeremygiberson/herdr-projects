@@ -54,8 +54,6 @@ const SECTION_FIELDS = {
 const MODES = ["ask", "always", "never"];
 const MODE_HELP = { ask: "ask for a branch name", always: "always a new worktree", never: "open the checkout" };
 
-// A list as box text; an old entry like "a ;; b" shows as two lines, as saving would store it.
-const lines = (list) => joinList(splitList(joinList(list)));
 // Editor fields: text ones keep an InputState (a TextareaState when the last element is true), the rest are buttons.
 const TEXT = [
   ["name", "Name", (p) => p.name, (p, v) => (p.name = v)],
@@ -65,11 +63,11 @@ const TEXT = [
   ["branchTemplate", "Branch name", (p) => p.worktree.branchTemplate, (p, v) => (p.worktree.branchTemplate = v), "{user} {date} {slug} {repo} {project}"],
   ["root", "Worktree folder", (p) => p.worktree.root, (p, v) => (p.worktree.root = v), "{repo} {branch} plus the above"],
   ["spaceName", "Space name", (p) => p.worktree.spaceName, (p, v) => (p.worktree.spaceName = v), "the sidebar name: {name} {branch} {slug} {user} {date} {repo}"],
-  ["copy", "Copy from the checkout", (p) => lines(p.worktree.copy), (p, v) => (p.worktree.copy = splitList(v)), "one path or glob per line, relative to the checkout; existing files are kept", true],
-  ["wtSetup", "Worktree setup", (p) => lines(p.worktree.setup), (p, v) => (p.worktree.setup = splitList(v)), "one command per line; runs once, when the worktree is new", true],
+  ["copy", "Copy from the checkout", (p) => joinList(p.worktree.copy), (p, v) => (p.worktree.copy = splitList(v)), "one path or glob per line, relative to the checkout; existing files are kept", true],
+  ["wtSetup", "Worktree setup", (p) => joinList(p.worktree.setup), (p, v) => (p.worktree.setup = splitList(v)), "one command per line; runs once, when the worktree is new", true],
   ["remote", "Remote", (p) => p.git.remote, (p, v) => (p.git.remote = v)],
   ["base", "Base branch", (p) => p.git.base, (p, v) => (p.git.base = v)],
-  ["setup", "Setup commands", (p) => lines(p.startup.setup), (p, v) => (p.startup.setup = splitList(v)), "one command per line; runs on every open, after the worktree setup", true],
+  ["setup", "Setup commands", (p) => joinList(p.startup.setup), (p, v) => (p.startup.setup = splitList(v)), "one command per line; runs on every open, after the worktree setup", true],
 ];
 // The Startup section's boxes for a tab and for a pane: [field, label, note]. Each tab or pane object gets its own (see boxFor).
 const TAB_BOXES = [

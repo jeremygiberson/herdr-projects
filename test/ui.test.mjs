@@ -1679,7 +1679,7 @@ test("Shift+Enter on the list opens the launch screen on the checkout path", asy
 
 test("the editor shows copy and worktree setup as one path or command per line and saves them as lists", async () => {
   const dir = realpathSync(makeRepo());
-  const { v, cx } = await open([proj("api", dir, { worktree: { copy: [".env"], setup: ["npm ci"] }, startup: { setup: ["a ;; b"] } })]);
+  const { v, cx } = await open([proj("api", dir, { worktree: { copy: [".env"], setup: ["npm ci"] }, startup: { setup: ["a", "b"] } })]);
   press(v, cx, "e", { alt: true }); v.showSection("worktree");
   assert.equal(v.fieldState("copy").value(), ".env"); assert.equal(v.fieldState("wtSetup").value(), "npm ci");
   v.fieldState("copy").set_value(".env\n.claude/*"); v.fieldState("wtSetup").set_value("npm ci\nnpm run build");

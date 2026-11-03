@@ -611,3 +611,7 @@ test("setupSummary counts copy and setup and names the timing", () => {
   assert.equal(setupSummary(normalize({ path: "/a", worktree: { copy: [".env"], setup: ["npm ci", "npm run build"] }, startup: { setup: ["docker compose up -d"], agentTiming: "after" } })), "1 copy · 3 setup · agent after setup");
   assert.equal(setupSummary(normalize({ path: "/a", startup: { agentTiming: "with" } })), "no setup");
 });
+
+test("a setup command containing ;; stays one element", () => {
+  assert.deepEqual(normalize({ path: "/a", startup: { setup: ["case x in a) ;; esac"] } }).startup.setup, ["case x in a) ;; esac"]);
+});
