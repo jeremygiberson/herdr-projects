@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder } from "../mods/projects/lib.js";
 
 test("fuzzy matches subsequences and ranks tighter matches higher", () => {
   assert.equal(fuzzy("zzz", "herdr"), -1);
@@ -108,9 +108,11 @@ test("blankProject and normalize", () => {
   assert.equal(b.name, "api");
   assert.equal(b.worktree.mode, "ask");
   assert.deepEqual(b.startup.setup, []);
+  assert.deepEqual(b.startup, { setup: [], agentTiming: "after", tabs: [] });
+  assert.equal(b.description, "");
   const n = normalize({ name: "x", startup: { agent: "claude" } });
-  assert.equal(n.startup.agent, "claude");
-  assert.equal(n.startup.promptMode, "arg");
+  assert.equal(n.startup.tabs[0].panes[0].agent, "claude");
+  assert.equal(n.startup.tabs[0].panes[0].promptMode, "arg");
   assert.equal(normalize(undefined).path, "");
   assert.deepEqual(normalize({ path: "/a" }).git, { fetch: true, remote: "origin", base: "main", fastForward: false });
 });
@@ -148,10 +150,11 @@ test("layoutPlan lists the splits in order and defaults each to the previous pan
     { name: "term", type: "shell", direction: "down" },
     { name: "logs", type: "command", command: " tail -f log ", direction: "down", from: "agent" },
   ] });
+  const pane = (over) => blankPane(over);
   assert.deepEqual(plan, [
-    { name: "files", type: "command", command: "yazi .", direction: "right", from: "agent" },
-    { name: "term", type: "shell", command: "", direction: "down", from: "files" },
-    { name: "logs", type: "command", command: "tail -f log", direction: "down", from: "agent" },
+    pane({ name: "files", type: "command", command: "yazi .", direction: "right", from: "agent" }),
+    pane({ name: "term", type: "shell", direction: "down", from: "files" }),
+    pane({ name: "logs", type: "command", command: "tail -f log", direction: "down", from: "agent" }),
   ]);
   assert.deepEqual(layoutPlan({ name: "solo", panes: [{ type: "agent" }] }), []);
   assert.deepEqual(layoutPlan(undefined), []);
@@ -182,7 +185,7 @@ test("inFolder wraps a command so it starts in the folder, or starts a shell wit
   assert.deepEqual(inFolder("/r/x").slice(4), ["/r/x"]);
 });
 
-test("normalize gives every project an empty layout", () => assert.equal(normalize({ path: "/a" }).startup.layout, ""));
+test("normalize gives every project tabs", () => assert.ok(Array.isArray(normalize({ path: "/a" }).startup.tabs)));
 
 test("fuzzyPositions marks the letters fuzzy matched, and none for a miss or an empty query", () => {
   assert.deepEqual(fuzzyPositions("apgw", "api-gateway"), [0, 1, 4, 8]);
@@ -282,8 +285,8 @@ test("the default template is a project with no folder and some starting setting
   assert.equal(tpl.template, true);
   assert.equal(tpl.name, "Template");
   assert.equal(tpl.path, "");
-  assert.equal(tpl.startup.agent, "claude");
-  assert.equal(tpl.startup.layout, "agent-terminal");
+  assert.deepEqual(tpl.startup.tabs[0].panes.map((x) => x.type), ["agent", "shell"]);
+  assert.equal(tpl.startup.tabs[0].panes[0].agent, "claude");
   assert.equal(tpl.worktree.mode, "ask");
   assert.deepEqual(defaultTemplate(), tpl, "the same every time");
 });
@@ -296,17 +299,18 @@ test("uniqueName adds a counter only when the name is taken", () => {
 
 test("duplicateProject copies the settings, keeps the folder, drops pinned, and names the copy", () => {
   const src = normalize({ name: "api", path: "/r/api", group: "work", pinned: true, startup: { agent: "codex", layout: "agent-terminal" }, worktree: { mode: "always" } });
+  assert.equal(src.startup.tabs[0].panes[0].agent, "codex");
   const copy = duplicateProject(src, ["api"]);
   assert.equal(copy.name, "api copy");
   assert.equal(copy.path, "/r/api");
   assert.equal(copy.pinned, false);
   assert.equal(copy.group, "work");
-  assert.equal(copy.startup.agent, "codex");
+  assert.equal(copy.startup.tabs[0].panes[0].agent, "codex");
   assert.equal(copy.worktree.mode, "always");
   assert.equal(copy.template, undefined);
   assert.equal(duplicateProject(src, ["api", "api copy"]).name, "api copy 2");
-  copy.startup.agent = "changed";
-  assert.equal(src.startup.agent, "codex", "a deep copy");
+  copy.startup.tabs[0].panes[0].agent = "changed";
+  assert.equal(src.startup.tabs[0].panes[0].agent, "codex", "a deep copy");
 });
 
 test("duplicating the template makes a project with the template's settings and no folder", () => {
@@ -314,7 +318,7 @@ test("duplicating the template makes a project with the template's settings and 
   assert.equal(copy.name, "New project");
   assert.equal(copy.path, "");
   assert.equal(copy.template, undefined);
-  assert.equal(copy.startup.agent, "claude");
+  assert.equal(copy.startup.tabs[0].panes[0].agent, "claude");
   assert.equal(duplicateProject(defaultTemplate(), ["New project"]).name, "New project 2");
 });
 
@@ -325,7 +329,7 @@ test("startFromTemplate keeps the settings and blanks the name and folder", () =
   assert.equal(p.path, "");
   assert.equal(p.pinned, false);
   assert.equal(p.template, undefined);
-  assert.deepEqual([p.group, p.startup.agent, p.startup.promptMode, p.git.base], ["g", "hermes", "send", "develop"]);
+  assert.deepEqual([p.group, p.startup.tabs[0].panes[0].agent, p.startup.tabs[0].panes[0].promptMode, p.git.base], ["g", "hermes", "send", "develop"]);
 });
 
 test("listItems puts the template in its own last section, never under Open now or Pinned", () => {
@@ -365,7 +369,7 @@ test("parseBackup reads a backup and a plain data file, and says what is wrong w
   const data = { projects: [{ name: "api", path: "~/api", startup: { agent: "codex" } }], layouts: [{ name: "x", panes: [] }], gitInfo: false, hideTemplate: true };
   for (const text of [JSON.stringify({ format: BACKUP_FORMAT, version: 1, ...data }), JSON.stringify(data)]) {
     const b = parseBackup(text);
-    assert.equal(b.projects[0].startup.agent, "codex");
+    assert.equal(b.projects[0].startup.tabs[0].panes[0].agent, "codex");
     assert.equal(b.projects[0].git.base, "main", "missing settings are filled in");
     assert.deepEqual([b.gitInfo, b.hideTemplate, b.layouts.length], [false, true, 1]);
   }
@@ -389,7 +393,7 @@ test("mergeProjects adds what is missing (same name and folder counts as present
   const r = mergeProjects(mine, theirs);
   assert.deepEqual(r.projects.map((p) => `${p.name}@${p.path}`), ["api@/r/api", "Mine@", "api@/r/other", "blog@~/blog"]);
   assert.deepEqual([r.added, r.skipped], [2, 2]);
-  assert.equal(r.projects[0].startup.agent, "claude", "your copy of api is kept");
+  assert.equal(r.projects[0].startup.tabs[0].panes[0].agent, "claude", "your copy of api is kept");
   assert.equal(mergeProjects([], theirs).projects.filter((p) => p.template).length, 1, "a template is added when you have none");
   assert.deepEqual(mine.length, 2, "the input is not changed");
 });
@@ -419,4 +423,88 @@ test("withLauncherBlocks puts the launcher beside spaces, status and tabs, only 
   assert.deepEqual(section.children.map((c) => c.id), ["spaces", "projects-launch-sidebar"]);
   assert.deepEqual(out.tree.children[1].size, { px: 42 });
   assert.deepEqual(withLauncherBlocks(out.tree).added, [], "already there: nothing added");
+});
+
+test("normalize upgrades a legacy startup: agent, layout and string tabs become tabs", () => {
+  const p = normalize({ path: "/a", startup: { agent: "claude --model opus", args: "-p", prompt: "hi", promptMode: "send", layout: "agent-terminal", tabs: ["lazygit", "npm run dev"] } });
+  assert.deepEqual(p.startup.tabs.map((t) => t.name), ["agent", "lazygit", "npm"]);
+  assert.deepEqual(p.startup.tabs[0].panes.map((x) => x.type), ["agent", "shell"]);
+  assert.equal(p.startup.tabs[0].panes[0].agent, "claude --model opus");
+  assert.equal(p.startup.tabs[0].panes[0].prompt, "hi");
+  assert.equal(p.startup.tabs[0].panes[1].direction, "down");
+  assert.equal(p.startup.tabs[1].command, "lazygit");
+  assert.equal(p.startup.agentTiming, "after");
+  for (const k of ["agent", "args", "prompt", "promptMode", "layout"]) assert.ok(!(k in p.startup), k);
+});
+test("normalize: a legacy layout defined by the user expands, an unknown one leaves the agent alone", () => {
+  const mine = [{ name: "coding", panes: [{ type: "agent" }, { name: "files", type: "command", command: "yazi .", direction: "right" }] }];
+  assert.deepEqual(normalize({ path: "/a", startup: { agent: "claude", layout: "coding" } }, mine).startup.tabs[0].panes.map((x) => x.name), ["agent", "files"]);
+  assert.equal(normalize({ path: "/a", startup: { agent: "claude", layout: "nope" } }).startup.tabs[0].panes.length, 1);
+});
+test("normalize: a legacy plain shell with no layout is one shell tab; no startup at all is one shell tab", () => {
+  assert.deepEqual(normalize({ path: "/a", startup: { agent: "" } }).startup.tabs[0].panes, [{ name: "agent", type: "shell", command: "", agent: "", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "" }]);
+  assert.equal(normalize({ path: "/a" }).startup.tabs[0].name, "shell");
+});
+test("normalize fills a new-shape tab: neither command nor panes is a plain shell, panes: [] too", () => {
+  const p = normalize({ path: "/a", startup: { tabs: [{ name: "x" }, { name: "y", panes: [] }, { name: "z", folder: "sub", command: "make" }] } });
+  assert.deepEqual(p.startup.tabs.map((t) => [t.command, t.panes.length]), [["", 0], ["", 0], ["make", 0]]);
+  assert.equal(p.startup.tabs[2].folder, "sub");
+  assert.equal(p.description, "");
+});
+test("tabPlan fills names, directions and from, and turns a command tab into one pane", () => {
+  const plan = tabPlan([{ name: "a", panes: [{ type: "agent", agent: "claude" }, { type: "shell" }, { type: "command", command: "top", direction: "right", from: "agent" }] }, { name: "b", command: "lazygit" }, { name: "c" }]);
+  assert.deepEqual(plan[0].panes.map((x) => [x.name, x.direction, x.from]), [["agent", "", ""], ["pane2", "down", "agent"], ["pane3", "right", "agent"]]);
+  assert.deepEqual(plan[1].panes, [{ name: "pane1", type: "command", command: "lazygit", agent: "", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "" }]);
+  assert.equal(plan[2].panes[0].type, "shell");
+});
+test("tabPlan names the problem", () => {
+  assert.throws(() => tabPlan([{ name: "a" }, { panes: [] }]), /Tab 2 needs a name/);
+  assert.throws(() => tabPlan([{ name: "api", command: "x", panes: [{ type: "shell" }] }]), /either a command or panes/);
+  assert.throws(() => tabPlan([{ name: "api", panes: [{ type: "shell" }, { name: "db", type: "shell", direction: "up" }] }]), /pane "db" needs direction/);
+  assert.throws(() => tabPlan([{ name: "api", panes: [{ type: "shell" }, { name: "db", type: "x" }] }]), /unknown type "x"/);
+  assert.throws(() => tabPlan([{ name: "api", panes: [{ type: "shell" }, { name: "db", type: "command" }] }]), /command pane "db" has no command/);
+  assert.throws(() => tabPlan([{ name: "api", panes: [{ type: "shell" }, { name: "db", type: "shell", from: "y" }] }]), /splits "y"/);
+  assert.throws(() => tabPlan([{ name: "api", panes: [{ name: "db", type: "shell" }, { name: "db", type: "shell" }] }]), /two panes are called "db"/);
+});
+test("tabsForLaunch: none keeps the project's tabs, a panes layout replaces tab 1's panes, a tabs layout replaces all; agent panes inherit the project's agent", () => {
+  const p = normalize({ path: "/a", startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "codex", args: "-q" }] }, { name: "git", command: "lazygit" }] } });
+  const layouts = [{ name: "side", panes: [{ type: "agent" }, { type: "shell", direction: "right" }] }, { name: "full", tabs: [{ name: "only", panes: [{ type: "agent" }] }] }];
+  assert.equal(tabsForLaunch(p, layouts, ""), p.startup.tabs);
+  const side = tabsForLaunch(p, layouts, "side");
+  assert.deepEqual([side.length, side[0].panes.length, side[0].panes[0].agent, side[1].name], [2, 2, "codex", "git"]);
+  const full = tabsForLaunch(p, layouts, "full");
+  assert.deepEqual([full.length, full[0].name, full[0].panes[0].args], [1, "only", "-q"]);
+  const noAgent = normalize({ path: "/a", startup: { tabs: [{ name: "s" }] } });
+  assert.equal(tabsForLaunch(noAgent, layouts, "side")[0].panes[0].type, "shell");
+  assert.throws(() => tabsForLaunch(p, layouts, "nope"), /No layout called "nope"/);
+});
+test("firstAgent finds the first agent pane across tabs, or null", () => {
+  const tabs = normalize({ path: "/a", startup: { tabs: [{ name: "s" }, { name: "t", panes: [{ type: "shell" }, { type: "agent", agent: "claude", direction: "down" }] }] } }).startup.tabs;
+  const f = firstAgent(tabs);
+  assert.deepEqual([f.tab, f.index, f.pane.agent], [1, 1, "claude"]);
+  assert.equal(firstAgent([]), null);
+});
+test("blankPane defaults every field and applies overrides", () => {
+  assert.deepEqual(blankPane({ type: "agent", agent: "claude" }), { name: "", type: "agent", command: "", agent: "claude", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "" });
+});
+test("tabLabels marks split tabs with a pane count", () => {
+  assert.deepEqual(tabLabels([{ name: "server", panes: [{}, {}] }, { name: "git", command: "lazygit", panes: [] }]), ["server ×2", "git"]);
+});
+test("expandPath and resolveFolder", () => {
+  const env = { HOME: "/h", X: "x" };
+  assert.equal(expandPath("~/a/$X/${X}b", "/h", env), "/h/a/x/xb");
+  assert.equal(expandPath("$NOPE/a", "/h", env), "/a");
+  assert.equal(expandPath("", "/h", env), "");
+  assert.equal(resolveFolder("/p", "", "/h", env), "/p");
+  assert.equal(resolveFolder("/p", "frontend", "/h", env), "/p/frontend");
+  assert.equal(resolveFolder("/p/api", "../db", "/h", env), "/p/db");
+  assert.equal(resolveFolder("/p", "/abs", "/h", env), "/abs");
+  assert.equal(resolveFolder("/p", "~/w", "/h", env), "/h/w");
+});
+test("defaultTemplate, duplicateProject and startFromTemplate use the tab model", () => {
+  const t = defaultTemplate();
+  assert.deepEqual(t.startup.tabs[0].panes.map((x) => x.type), ["agent", "shell"]);
+  assert.equal(t.startup.tabs[0].panes[0].agent, "claude");
+  assert.equal(duplicateProject(t, []).startup.tabs[0].panes[0].agent, "claude");
+  assert.equal(startFromTemplate(t).startup.tabs.length, 1);
 });

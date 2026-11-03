@@ -82,3 +82,10 @@ test("hideTemplate is read only when it is true, and saveConfig can set it while
   assert.equal(data.layouts[0].name, "a");
   assert.equal((await loadConfig()).hideTemplate, true);
 });
+
+test("loadConfig hands the file's layouts to normalize, so a legacy layout name expands", async () => {
+  mkdirSync(`${state.appHome}/data`, { recursive: true });
+  writeFileSync(`${state.appHome}/data/projects.json`, JSON.stringify({ layouts: [{ name: "mine", panes: [{ type: "agent" }, { type: "shell", direction: "right" }] }], projects: [{ name: "a", path: "/a", startup: { agent: "claude", layout: "mine" } }] }));
+  const c = await loadConfig();
+  assert.equal(c.projects[0].startup.tabs[0].panes.length, 2);
+});

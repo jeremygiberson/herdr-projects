@@ -107,6 +107,7 @@ export function blankProject(path = "") {
     name: basename(path),
     path,
     group: "",
+    description: "",
     pinned: false,
     worktree: {
       mode: "ask",
@@ -116,20 +117,137 @@ export function blankProject(path = "") {
       repoSpace: false,
     },
     git: { fetch: true, remote: "origin", base: "main", fastForward: false },
-    startup: { agent: "", args: "", prompt: "", promptMode: "arg", setup: [], tabs: [], layout: "" },
+    startup: { setup: [], agentTiming: "after", tabs: [] },
   };
 }
 
-/** Fills anything missing from a hand-edited project, keeping what is there. */
-export function normalize(p) {
+// ---- tabs and panes ---------------------------------------------------------------------------
+// Tab:  { name, folder, command, panes: Pane[] }   (command "" when there are panes; neither: a plain shell)
+// Pane: { name, type: "agent"|"shell"|"command", command, agent, args, prompt, promptMode: "arg"|"send",
+//         direction: "right"|"down"|"", from, folder }
+
+/** A pane with every field defaulted, `over` applied. */
+export const blankPane = (over = {}) => ({ name: "", type: "shell", command: "", agent: "", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "", ...over });
+
+// A stored pane with its fields filled; a pane with a command and no type is a command pane.
+const fillPane = (x) => blankPane({ ...x, type: x?.type ?? (String(x?.command ?? "").trim() ? "command" : "shell") });
+const fillTab = (t) => ({ ...t, name: t?.name ?? "", folder: t?.folder ?? "", command: t?.command ?? "", panes: Array.isArray(t?.panes) ? t.panes.map(fillPane) : [] });
+
+const LEGACY_STARTUP_KEYS = ["agent", "args", "prompt", "promptMode", "layout"];
+
+/** The tabs of an old-style startup (one agent, a named layout, extra tab commands). */
+function upgradeStartup(su, layouts) {
+  const agent = String(su.agent ?? "");
+  const first = agent.trim()
+    ? blankPane({ type: "agent", name: "agent", agent, args: su.args ?? "", prompt: su.prompt ?? "", promptMode: su.promptMode ?? "arg" })
+    : blankPane({ type: "shell", name: "agent" });
+  const layout = su.layout ? allLayouts(layouts).find((l) => l.name === su.layout && Array.isArray(l.panes)) : null;
+  const panes = layout ? [{ ...first, name: layout.panes[0]?.name ?? "agent" }, ...layout.panes.slice(1).map(fillPane)] : [first];
+  const rest = (Array.isArray(su.tabs) ? su.tabs : []).map((t) => (typeof t === "string" ? { name: commandName(t), command: t, panes: [] } : t));
+  return [{ name: "agent", folder: "", command: "", panes }, ...rest].map(fillTab);
+}
+
+/** Fills anything missing from a hand-edited project, keeping what is there. An old-style `startup` becomes tabs.
+ *  `layouts` are the file's own layouts, used only to expand an old `startup.layout`. */
+export function normalize(p, layouts = []) {
   const b = blankProject(p?.path ?? "");
+  const su = p?.startup ?? {};
+  const legacy = LEGACY_STARTUP_KEYS.some((k) => k in su) || (Array.isArray(su.tabs) && su.tabs.some((t) => typeof t === "string"));
+  const startup = { ...b.startup, ...su };
+  for (const k of LEGACY_STARTUP_KEYS) delete startup[k];
+  startup.tabs = legacy ? upgradeStartup(su, Array.isArray(layouts) ? layouts : []) : (Array.isArray(su.tabs) ? su.tabs : []).map(fillTab);
+  if (!startup.tabs.length) startup.tabs = [fillTab({ name: "shell" })];
   return {
     ...b,
     ...p,
     worktree: { ...b.worktree, ...(p?.worktree ?? {}) },
     git: { ...b.git, ...(p?.git ?? {}) },
-    startup: { ...b.startup, ...(p?.startup ?? {}) },
+    startup,
   };
+}
+
+/** The first agent pane across the tabs: { tab, index, pane }, or null. */
+export function firstAgent(tabs) {
+  for (let i = 0; i < (tabs ?? []).length; i++) {
+    const j = (tabs[i].panes ?? []).findIndex((x) => x.type === "agent");
+    if (j >= 0) return { tab: i, index: j, pane: tabs[i].panes[j] };
+  }
+  return null;
+}
+
+/** Tab names for a bar: "server ×2" for a split tab. */
+export const tabLabels = (tabs) => (tabs ?? []).map((t) => ((t.panes ?? []).length > 1 ? `${t.name} ×${t.panes.length}` : t.name));
+
+/** `~`/`$HOME`, then `$VAR` and `${VAR}` from `env` (unknown: ""). */
+export function expandPath(text, home, env = {}) {
+  return expandHome(text, home).replace(/\$\{(\w+)\}|\$(\w+)/g, (_m, a, b) => env[a ?? b] ?? "");
+}
+
+/** A tab's or pane's folder as an absolute path: "" is `base`, absolute stays, else relative to `base` (`.` and `..` collapsed). */
+export function resolveFolder(base, text, home, env = {}) {
+  const e = expandPath(text, home, env);
+  if (!e) return base;
+  if (e.startsWith("/")) return e;
+  const parts = [];
+  for (const seg of `${base}/${e}`.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return "/" + parts.join("/");
+}
+
+/** The tabs to launch: the project's own for no layout (`pick` "" or null); a layout with `tabs` replaces them; a layout with
+ *  only `panes` replaces tab 1's panes. An agent pane left empty by a layout takes the project's first agent, else is a shell. */
+export function tabsForLaunch(project, layouts, pick) {
+  const own = project.startup.tabs;
+  if (!pick) return own;
+  const layout = allLayouts(layouts).find((l) => l.name === pick);
+  if (!layout) throw new Error(`No layout called "${pick}"`);
+  const tabs = Array.isArray(layout.tabs)
+    ? layout.tabs.map(fillTab)
+    : [{ ...own[0], command: "", panes: layout.panes.map(fillPane) }, ...own.slice(1)];
+  const src = firstAgent(own)?.pane;
+  return tabs.map((t) => ({
+    ...t,
+    panes: t.panes.map((x) => {
+      if (x.type !== "agent" || x.agent.trim()) return x;
+      return src ? { ...x, agent: src.agent, args: src.args, prompt: src.prompt, promptMode: src.promptMode } : { ...x, type: "shell" };
+    }),
+  }));
+}
+
+/** Tabs validated and filled: every tab has panes (a command or nothing becomes one), every pane a name, and every
+ *  later pane a direction and the pane it splits. Throws with the reason when something can't be built. */
+export function tabPlan(tabs) {
+  return (tabs ?? []).map((t, ti) => {
+    const name = String(t?.name ?? "").trim();
+    if (!name) throw new Error(`Tab ${ti + 1} needs a name`);
+    const command = String(t.command ?? "").trim();
+    const given = Array.isArray(t.panes) ? t.panes : [];
+    if (command && given.length) throw new Error(`Tab "${name}": a tab has either a command or panes, not both`);
+    const list = given.length ? given : [command ? { type: "command", command } : { type: "shell" }];
+    const seen = [];
+    const panes = list.map((x, i) => {
+      const type = x?.type ?? (String(x?.command ?? "").trim() ? "command" : "shell");
+      const pname = String(x?.name ?? "").trim() || (type === "agent" ? "agent" : `pane${i + 1}`);
+      if (seen.includes(pname)) throw new Error(`Tab "${name}": two panes are called "${pname}"`);
+      if (!["agent", "shell", "command"].includes(type)) throw new Error(`Tab "${name}": pane "${pname}" has an unknown type "${x.type}"`);
+      const cmd = type === "command" ? String(x.command ?? "").trim() : "";
+      if (type === "command" && !cmd) throw new Error(`Tab "${name}": command pane "${pname}" has no command`);
+      let direction = "";
+      let from = "";
+      if (i > 0) {
+        direction = x?.direction ?? "down";
+        if (!["right", "down"].includes(direction)) throw new Error(`Tab "${name}": pane "${pname}" needs direction "right" or "down"`);
+        from = x?.from || seen[seen.length - 1];
+        if (!seen.includes(from)) throw new Error(`Tab "${name}": pane "${pname}" splits "${from}", which does not come before it`);
+      }
+      seen.push(pname);
+      return blankPane({ ...x, name: pname, type, command: cmd, direction, from });
+    });
+    return { ...t, name, folder: t.folder ?? "", command: t.command ?? "", panes };
+  });
 }
 
 // ---- pane layouts -----------------------------------------------------------------------------
@@ -145,30 +263,18 @@ export const BUILTIN_LAYOUTS = [
 
 /** The layouts to offer: built-ins, then the user's (a user layout replaces a built-in of the same name). */
 export function allLayouts(user) {
-  const mine = (user ?? []).filter((l) => l && typeof l.name === "string" && l.name.trim() && Array.isArray(l.panes));
+  const mine = (user ?? []).filter((l) => l && typeof l.name === "string" && l.name.trim() && (Array.isArray(l.panes) || Array.isArray(l.tabs)));
   const names = new Set(mine.map((l) => l.name));
   return [...BUILTIN_LAYOUTS.filter((l) => !names.has(l.name)), ...mine];
 }
 
-/** The splits that build a layout, in order: [{ name, type, command, direction, from }]. The first
- *  pane is the agent's and needs no split. Throws with the reason when a pane can't be placed. */
+/** The splits that build a layout, in order (pane objects: name, type, command, direction, from, ...). The first
+ *  pane is the agent's and needs no split. Throws with the reason when a pane can't be placed. A layout is written
+ *  by hand, so unlike a tab it must say each split's direction. */
 export function layoutPlan(layout) {
-  const panes = layout?.panes ?? [];
-  const seen = new Set();
-  const plan = [];
-  panes.forEach((pane, i) => {
-    const name = String(pane?.name ?? (i === 0 ? "agent" : `pane${i + 1}`));
-    if (seen.has(name)) throw new Error(`Layout "${layout.name}": two panes are called "${name}"`);
-    if (i > 0) {
-      if (!["right", "down"].includes(pane.direction)) throw new Error(`Layout "${layout.name}": pane "${name}" needs direction "right" or "down"`);
-      const type = pane.type ?? (pane.command ? "command" : "shell");
-      if (!["agent", "shell", "command"].includes(type)) throw new Error(`Layout "${layout.name}": pane "${name}" has an unknown type "${pane.type}"`);
-      if (type === "command" && !String(pane.command ?? "").trim()) throw new Error(`Layout "${layout.name}": command pane "${name}" has no command`);
-      const from = pane.from ?? [...seen].pop();
-      if (!seen.has(from)) throw new Error(`Layout "${layout.name}": pane "${name}" splits "${from}", which does not come before it`);
-      plan.push({ name, type, command: type === "command" ? String(pane.command).trim() : "", direction: pane.direction, from });
-    }
-    seen.add(name);
+  const plan = tabPlan([{ name: layout?.name ?? "layout", panes: layout?.panes ?? [] }])[0].panes.slice(1);
+  (layout?.panes ?? []).slice(1).forEach((x, i) => {
+    if (!["right", "down"].includes(x?.direction)) throw new Error(`Tab "${layout.name}": pane "${plan[i].name}" needs direction "right" or "down"`);
   });
   return plan;
 }
@@ -239,7 +345,7 @@ export function listItems(rows, searching) {
 export function layoutRects(layout) {
   let plan = [];
   try { plan = layoutPlan(layout); } catch { return [{ name: "agent", x: 0, y: 0, w: 1, h: 1 }]; }
-  const rects = [{ name: layout?.panes?.[0]?.name ?? "agent", x: 0, y: 0, w: 1, h: 1 }];
+  const rects = [{ name: layout?.panes?.length ? tabPlan([{ name: "l", panes: layout.panes }])[0].panes[0].name : "agent", x: 0, y: 0, w: 1, h: 1 }];
   for (const pane of plan) {
     const from = rects.find((r) => r.name === pane.from);
     if (!from) continue;
@@ -343,9 +449,10 @@ export function parseBackup(text) {
   if (!data || typeof data !== "object" || !Array.isArray(data.projects)) throw new Error("That file has no list of projects: is it a projects backup?");
   if (data.format !== undefined && data.format !== BACKUP_FORMAT) throw new Error(`That file is not a projects backup (format "${data.format}")`);
   if (data.version > 1) throw new Error("That backup is from a newer version of projects: update the mod, then import it");
+  const layouts = Array.isArray(data.layouts) ? data.layouts : [];
   return {
-    projects: data.projects.filter((p) => p && typeof p === "object").map(normalize),
-    layouts: Array.isArray(data.layouts) ? data.layouts : [],
+    projects: data.projects.filter((p) => p && typeof p === "object").map((p) => normalize(p, layouts)),
+    layouts,
     gitInfo: data.gitInfo !== false,
     hideTemplate: data.hideTemplate === true,
   };

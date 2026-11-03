@@ -11,7 +11,8 @@ export async function loadConfig() {
   if (raw == null) return { projects: [], layouts: [], gitInfo: true, hideTemplate: false, raw: null };
   try {
     const data = JSON.parse(raw);
-    return { projects: (data.projects ?? []).map(normalize), layouts: Array.isArray(data.layouts) ? data.layouts : [], gitInfo: data.gitInfo !== false, hideTemplate: data.hideTemplate === true, raw };
+    const layouts = Array.isArray(data.layouts) ? data.layouts : [];
+    return { projects: (data.projects ?? []).map((p) => normalize(p, layouts)), layouts, gitInfo: data.gitInfo !== false, hideTemplate: data.hideTemplate === true, raw };
   } catch (e) {
     throw new Error(`${dataFilePath()} is not valid JSON: ${e.message}`);
   }
