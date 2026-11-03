@@ -1,5 +1,5 @@
 // Everything that creates spaces, tabs and panes: a project's tabs become app commands here and nowhere else.
-import { exec, hc, run, focused, spaces, home } from "herdr";
+import { exec, hc, run, spaces, home } from "herdr";
 import { log as diag } from "./log.js";
 import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder } from "./lib.js";
 import { folderExists, findSpace, projectFolder } from "./git.js";
@@ -182,7 +182,7 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, log 
     // focused() can still be the window the picker was opened from just after space.new, so the new
     // space and its first pane come from `herdr-app ls`: the space that wasn't there before.
     const here = await findNewSpace(spacesBefore, name, dirs[0][0]);
-    const space = here?.space ?? focused()?.space;
+    const space = here?.space ?? null;
     // Found before the split panes exist, which also start in this folder.
     const firstTerminal = send && isLead(0, 0) ? await findNewTerminal(known, dirs[0][0]) : here?.terminal ?? null;
     const paneIds = [];
@@ -194,12 +194,13 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, log 
       agentPane = split.ids[pname] ?? agentPane;
       agentTerminal = split.terminals[pname] ?? agentTerminal;
     };
-    if (!here) diag("error", "tab 1's splits skipped: couldn't find the new space", { name });
+    // Without the new space, nothing else is made: a guess (the focused space) could put the tabs in another project.
+    if (!here) diag("error", "tab 1's splits and the later tabs skipped: couldn't find the new space", { name, tabs: plan.length });
     else {
       paneIds[0] = here.pane;
       try { noteAgent(0, await splitTab(0, here.pane, firstTerminal)); } catch (e) { diag("error", `tab 1: ${e.message}`); }
     }
-    for (let ti = 1; ti < plan.length; ti++) {
+    for (let ti = 1; here && ti < plan.length; ti++) {
       try {
         const t = plan[ti];
         const argv = argvOf(ti, 0);

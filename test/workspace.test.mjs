@@ -221,3 +221,11 @@ test("the repo's space counts as open when its space shows a folder below the re
   await build(project(dir, { worktree: { repoSpace: true } }), wt, "x");
   assert.equal(spaceNews().length, 1);
 });
+test("when the new space can't be found, the later tabs are skipped rather than made in another space", async () => {
+  state.appLsHidesSpaces = true;
+  state.focused = { space: "picker-space", pane: "picker-pane" };
+  const dir = repo();
+  await build(project(dir, { startup: { agent: "claude", tabs: ["npm test", "lazygit"] } }), dir, "Demo");
+  assert.equal(spaceNews().length, 1);
+  assert.deepEqual(state.tabsMade, []);
+});

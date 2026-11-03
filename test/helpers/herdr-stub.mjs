@@ -29,10 +29,11 @@ export const state = {
   splits: [],           // every `herdr-app do pane.split`
   splitFails: false,
   tabsMade: [],         // every `herdr-app do tab.new`
+  appLsHidesSpaces: false, // `herdr-app ls` lists no spaces (a new space is never found)
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], closed: 0, platform: "linux", picked: null });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, closed: 0, platform: "linux", picked: null });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -47,7 +48,7 @@ export function exec(command, args = [], options = {}) {
   // The real herdr-app would split the person's window: answer like it, and record the request.
   if (command === "herdr-app") {
     if (args[0] === "ls") {
-      const spaces = state.spaces.map((s) => ({ ...s, tabs: [{ id: `tb-${s.id}`, terminals: [{ terminal: `t-${s.id}`, pane: `pane-of-${s.id}` }] }, ...state.tabsMade.map((t, i) => ({ t, tab: `tab-${i + 1}` })).filter(({ t }) => t.space === s.id).map(({ tab }) => ({ id: tab, terminals: [{ terminal: `t-${tab}`, pane: `pane-of-${tab}` }] }))] }));
+      const spaces = (state.appLsHidesSpaces ? [] : state.spaces).map((s) => ({ ...s, tabs: [{ id: `tb-${s.id}`, terminals: [{ terminal: `t-${s.id}`, pane: `pane-of-${s.id}` }] }, ...state.tabsMade.map((t, i) => ({ t, tab: `tab-${i + 1}` })).filter(({ t }) => t.space === s.id).map(({ tab }) => ({ id: tab, terminals: [{ terminal: `t-${tab}`, pane: `pane-of-${tab}` }] }))] }));
       return Promise.resolve({ code: 0, stdout: JSON.stringify({ spaces }), stderr: "" });
     }
     const [, name, json] = args;
