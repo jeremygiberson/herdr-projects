@@ -28,10 +28,11 @@ export const state = {
   hangNextLs: false, // the next `hc ls` never answers
   splits: [],           // every `herdr-app do pane.split`
   splitFails: false,
+  tabsMade: [],         // every `herdr-app do tab.new`
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, closed: 0, platform: "linux", picked: null });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], closed: 0, platform: "linux", picked: null });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -46,15 +47,21 @@ export function exec(command, args = [], options = {}) {
   // The real herdr-app would split the person's window: answer like it, and record the request.
   if (command === "herdr-app") {
     if (args[0] === "ls") {
-      const spaces = state.spaces.map((s) => ({ ...s, tabs: [{ id: `tb-${s.id}`, terminals: [{ terminal: `t-${s.id}`, pane: `pane-of-${s.id}` }] }] }));
+      const spaces = state.spaces.map((s) => ({ ...s, tabs: [{ id: `tb-${s.id}`, terminals: [{ terminal: `t-${s.id}`, pane: `pane-of-${s.id}` }] }, ...state.tabsMade.map((t, i) => ({ t, tab: `tab-${i + 1}` })).filter(({ t }) => t.space === s.id).map(({ tab }) => ({ id: tab, terminals: [{ terminal: `t-${tab}`, pane: `pane-of-${tab}` }] }))] }));
       return Promise.resolve({ code: 0, stdout: JSON.stringify({ spaces }), stderr: "" });
     }
     const [, name, json] = args;
     const a = JSON.parse(json ?? "{}");
+    if (name === "tab.new") {
+      const n = state.tabsMade.length + 1;
+      state.tabsMade.push(a);
+      state.terminals.push({ address: `t-tab-${n}`, cwd: a.folder, state: "live", status: state.agentStatus, argv: a.argv ?? [] });
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ space: a.space, tab: `tab-${n}`, terminal: `t-tab-${n}` }), stderr: "" });
+    }
     if (state.splitFails) return Promise.resolve({ code: 1, stdout: JSON.stringify({ error: "no such pane" }), stderr: "" });
     state.splits.push({ command: name, ...a });
     const id = `pane-${state.splits.length}`;
-    state.terminals.push({ address: `t${state.nextId++}`, cwd: a.argv?.[4], state: "live", status: null, argv: a.argv });
+    state.terminals.push({ address: `t-${id}`, cwd: a.argv?.[4], state: "live", status: state.agentStatus, argv: a.argv });
     return Promise.resolve({ code: 0, stdout: JSON.stringify({ pane: id, terminal: `t-${id}` }), stderr: "" });
   }
   return new Promise((resolve, reject) => {

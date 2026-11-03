@@ -7,10 +7,11 @@ import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
 import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome } from "herdr";
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
-import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, runSetup, findSpace, launch, gitSummary, folderExists } from "./git.js";
+import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, runSetup, findSpace, gitSummary, folderExists } from "./git.js";
+import { buildWorkspace } from "./workspace.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, shortHome, splitList, joinList, basename, allLayouts, nextLayout, layoutPlan, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks } from "./lib.js";
+import { fuzzy, blankProject, shortHome, splitList, joinList, basename, allLayouts, nextLayout, layoutPlan, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -462,7 +463,7 @@ export default class ProjectPresets extends View {
         setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
         if (p.startup.agent.trim() && p.startup.prompt && p.startup.promptMode === "send") log("Waiting for the agent to be ready for its prompt…");
         // Stay open until the prompt is sent: closing the popup cancels this task.
-        await launch(p, folder, name, layout);
+        await buildWorkspace({ project: p, folder, name, tabs: tabsForLaunch(p, this.layouts, this.layoutNameFor(p)), prompt: firstAgent(p.startup.tabs)?.pane.prompt ?? "", log });
         this.dismiss();
       } catch (e) {
         logError("open project", e);
