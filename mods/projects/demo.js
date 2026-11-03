@@ -1,5 +1,6 @@
 // Documentation screenshots: `~/.config/herdr-app/data/projects.demo` (JSON) opens the picker
 // already in a given view, so each screen can be captured the same way every time. Absent by default.
+// Delete it after use: a leftover file with "view": "launch" launches the project every time the picker opens.
 //   { "view": "list|edit|delete|name|worktrees|backup|duplicate|busy|launch (Enter on the named project)", "project": "api-gateway", "query": "apgw",
 //     "focus": "name", "tab": 1, "pane": 0, "text": "fix login", "tick": true, "confirm": true, "notes": ["…"],
 //     "detail": true|false (show or hide the detail card), "layout": "agent-terminal" (a layout picked for the launch) }
