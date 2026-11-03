@@ -30,7 +30,7 @@ esac
   promptFile = join(tmp, "prompt.txt");
 });
 
-const run = (timeout) => execFileSync("sh", [SCRIPT, "t1", promptFile, String(timeout)], {
+const run = (timeout, agent = "hermes") => execFileSync("sh", [SCRIPT, "t1", promptFile, agent, String(timeout)], {
   env: { ...process.env, PATH: `${tmp}/bin:${process.env.PATH}`, STATE_FILE, SENT_FILE, FG_FILE }, encoding: "utf8",
 });
 const exitCode = (fn) => { try { fn(); return 0; } catch (e) { return e.status; } };
@@ -49,13 +49,15 @@ test("send-prompt.sh gives up on blocked (exit 1) and on timeout (exit 2)", () =
   assert.equal(exitCode(() => run(3)), 2);
   assert.equal(existsSync(SENT_FILE), false);
 });
-test("send-prompt.sh sends to a status-less agent once a non-shell program has held the foreground for 6 s, never to a shell", () => {
-  writeFileSync(STATE_FILE, ""); writeFileSync(FG_FILE, "hermes"); writeFileSync(promptFile, "hey");
+test("send-prompt.sh sends to a status-less agent only once the agent itself has held the foreground for 6 s, never to setup or a shell", () => {
+  writeFileSync(STATE_FILE, ""); writeFileSync(FG_FILE, "npm"); writeFileSync(promptFile, "hey");
+  // the setup chain (npm) is in front for 4 s, then it execs into hermes
+  spawn("sh", ["-c", `sleep 4; echo hermes > "${FG_FILE}"`], { detached: true, stdio: "ignore" }).unref();
   const started = Date.now();
-  run(15);
+  run(20);
   const took = Date.now() - started;
   assert.equal(readFileSync(SENT_FILE, "utf8"), "hey");
-  assert.ok(took >= 5500 && took < 10000, `took ${took} ms`);
+  assert.ok(took >= 9500 && took < 14500, `took ${took} ms`);
   assert.equal(existsSync(promptFile), false);
   rmSync(SENT_FILE);
   writeFileSync(FG_FILE, "zsh"); writeFileSync(promptFile, "hey");

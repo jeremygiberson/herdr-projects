@@ -250,8 +250,9 @@ test("after timing with a send prompt starts the detached helper and does not wa
   assert.equal(state.sent.length, 0);
   const run = state.hcRuns[0].args;
   assert.ok(run.includes("--bg") && run.some((a) => a.endsWith("bin/send-prompt.sh")), run.join(" "));
-  const file = run[run.length - 1];
+  const file = run[run.length - 2];
   assert.equal(readFileSync(file, "utf8"), "go");
+  assert.deepEqual(run.slice(-2), [file, "hermes"]);
 });
 test("with timing runs the chain in a setup terminal beside the agent, which starts at once", async () => {
   const dir = realpathSync(makeRepo());

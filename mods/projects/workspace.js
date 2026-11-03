@@ -1,7 +1,7 @@
 // Everything that creates spaces, tabs and panes: a project's tabs become app commands here and nowhere else.
 import { exec, hc, run, spaces, home, appHome, writeTextFile } from "herdr";
 import { log as diag } from "./log.js";
-import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder, chainThenAgent, chainAlone } from "./lib.js";
+import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder, chainThenAgent, chainAlone, commandName } from "./lib.js";
 import { folderExists, findSpace, projectFolder } from "./git.js";
 
 const sleep = (s) => exec("sleep", [String(s)]);
@@ -138,12 +138,13 @@ async function startSetupTerminal(space, folder, chain) {
   await appDo("tab.rename", { id: tabId, name: "setup" }, "the setup tab");
 }
 
-/** Hands a send-mode prompt to a detached helper that types it once the agent (behind its setup chain) is ready. */
-async function startPromptHelper(terminal, prompt) {
+/** Hands a send-mode prompt to a detached helper that types it once the agent (behind its setup chain) is ready;
+ *  `program` is the agent's program name, which the helper waits to see in front when herdr reports no status. */
+async function startPromptHelper(terminal, prompt, program) {
   if (!terminal) return diag("error", "prompt not sent: couldn't find the new terminal");
   const file = `${appHome()}/data/projects/prompt-${Date.now()}.txt`;
   try { await writeTextFile(file, prompt, null); } catch (e) { return diag("error", `prompt not sent: ${e.message}`, { file }); }
-  const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--", "sh", `${appHome()}/mods/projects/bin/send-prompt.sh`, terminal, file]);
+  const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--", "sh", `${appHome()}/mods/projects/bin/send-prompt.sh`, terminal, file, program]);
   if (r.code !== 0) diag("error", `couldn't start the prompt helper: ${r.stderr.split("\n")[0]}`, { terminal });
 }
 
@@ -258,7 +259,7 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     else diag("error", "setup not run: couldn't find the new space", { folder });
     log("setup runs in the setup tab");
   }
-  if (send && after) await startPromptHelper(agentTerminal, prompt);
+  if (send && after) await startPromptHelper(agentTerminal, prompt, commandName(lead.pane.agent));
   else if (send) await sendWhenReady(agentTerminal, dirs[lead.tab][lead.index], prompt);
   return { space, agentTerminal };
 }
