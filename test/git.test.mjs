@@ -368,3 +368,17 @@ test("removeWorktree refuses a worktree with uncommitted changes", async () => {
   assert.ok(existsSync(wt.folder));
   assert.deepEqual(state.runs.filter((r) => r.command === "space.close"), []);
 });
+
+test("a branch typed with a slash is used verbatim, else the template applies", async () => {
+  const dir = realpathSync(makeRepo({ name: "Ada" }));
+  const p = project(dir);
+  assert.equal(await G.previewBranch(p, "feat/login"), "feat/login");
+  assert.equal(await G.previewBranch(p, "login"), "ada/login");
+  const wt = await G.createWorktree(p, "feat/login", note);
+  assert.equal(wt.branch, "feat/login");
+});
+test("an invalid verbatim branch is refused with git's reason", async () => {
+  const p = project(realpathSync(makeRepo()));
+  await assert.rejects(G.createWorktree(p, "a//b", note), /is not a valid branch name/);
+  await assert.rejects(G.createWorktree(p, "x/y.lock", note), /is not a valid branch name/);
+});

@@ -60,7 +60,8 @@ export async function templateVars(project, slugText) {
 
 /** What the branch will be called, before collisions are resolved. */
 export async function previewBranch(project, slugText) {
-  return branchName(project.worktree.branchTemplate, await templateVars(project, slugText));
+  const vars = await templateVars(project, slugText);
+  return slugText.includes("/") ? slugText.trim() : branchName(project.worktree.branchTemplate, vars);
 }
 
 /** git fetch, tolerating failure (offline): the local ref is used instead. */
@@ -95,7 +96,8 @@ export async function createWorktree(project, slugText, log) {
   await fetchRemote(folder, g, log);
   const base = await baseRef(folder, g);
   const vars = await templateVars(project, slugText);
-  const wanted = branchName(w.branchTemplate, vars);
+  // Text with a slash is the branch name itself; otherwise it feeds the template.
+  const wanted = slugText.includes("/") ? slugText.trim() : branchName(w.branchTemplate, vars);
   if (!wanted) throw new Error("The branch name template produced an empty name");
   if ((await git(folder, ["check-ref-format", "--branch", wanted])).code !== 0) throw new Error(`"${wanted}" is not a valid branch name`);
   const isTaken = async (branch, path) => (await git(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0 || (await exists(path));
