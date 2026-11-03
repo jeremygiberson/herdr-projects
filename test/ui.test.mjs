@@ -1592,6 +1592,15 @@ test("loaded by a launcher block, the mod draws the Projects button and runs the
   assert.deepEqual(state.runs.map((r) => [r.command, r.args.name]), [["mod.open", "projects"]], "a click opens the picker");
 });
 
+test("only the launcher copy in the chosen slot lets its watcher act", () => {
+  const { v } = openLauncher("status");
+  assert.equal(v.watcher.active(), false, "the default slot is the sidebar");
+  setShared("projects.launcher", "status");
+  assert.equal(v.watcher.active(), true);
+  setShared("projects.launcher", "off");
+  assert.equal(v.watcher.active(), false);
+});
+
 test("a launcher copy whose slot is not the chosen one hides its own block, once", () => {
   const { v } = openLauncher("tabs");
   setShared("projects.launcher", "status");

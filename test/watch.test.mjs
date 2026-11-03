@@ -24,7 +24,7 @@ function addSpace(id, folder, program = SHELL, over = {}) {
 
 /** A Watcher with recording fakes for its injected functions (real git underneath repoKey, branchOf, realPath),
  *  and a fake cx whose timer is captured and whose spawn runs at once. */
-function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent = null, build = null, loadConfig = null } = {}) {
+function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent = null, build = null, loadConfig = null, active = undefined } = {}) {
   const rec = { builds: [], setups: [], repoKeys: [], logs: [], order: [], timer: null };
   const tasks = [];
   const cx = { timer: { every: (ms, fn) => { rec.timer = { ms, fn }; } }, spawn: (fn) => { tasks.push(fn(cx)); } };
@@ -40,6 +40,7 @@ function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent =
     branchOf: G.branchOf,
     realPath: G.realPath,
     log: (level, message, data) => rec.logs.push({ level, message, data }),
+    ...(active ? { active } : {}),
   });
   const settle = async () => { while (tasks.length) await tasks.shift(); };
   const tick = async () => { w.tick(cx); await settle(); };
@@ -91,6 +92,23 @@ test("a new one-pane shell space on an autoLayout project's checkout is built wi
     chain: `chain:${dir}`, existing: existingOf("s1", dir),
   }]);
   assert.deepEqual(state.notified, [{ title: "Projects", body: `Api set up in ${basename(dir)}` }]);
+});
+
+test("an inactive watcher marks new spaces seen but never builds them, even once it turns active", async () => {
+  const dir = makeRepo();
+  let on = false;
+  const { w, cx, rec, tick } = harness({ projects: [apiProject(dir)], active: () => on });
+  w.start(cx);
+  addSpace("s1", dir);
+  await tick();
+  assert.ok(w.seen.has("s1"), "seen while inactive");
+  assert.deepEqual(rec.builds, []);
+  on = true;
+  await tick();
+  assert.deepEqual(rec.builds, [], "it appeared while another copy was the active one");
+  addSpace("s2", dir);
+  await tick();
+  assert.deepEqual(rec.builds.map((b) => b.existing.space), ["s2"], "active now: a later space is built");
 });
 
 test("a new space on a linked worktree of the project matches too, and prepareSetup gets isWorktree true", async () => {

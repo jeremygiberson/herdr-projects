@@ -93,7 +93,8 @@ export default class ProjectPresets extends View {
     if (slot) {
       this.slot = slot;
       initLog("launcher started");
-      this.watcher = new Watcher({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log });
+      // Every launcher block's copy is alive once shown, hidden or not: only the chosen slot's watcher acts.
+      this.watcher = new Watcher({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active: () => (shared(LAUNCHER) ?? "sidebar") === this.slot });
       this.watcher.start(cx);
       return;
     }

@@ -13,9 +13,11 @@ const TICK_MS = 2000;
 let queue = Promise.resolve();
 
 export class Watcher {
-  /** The functions are injected (main.js passes the real ones, tests fakes); `log(level, message, data)` is log.js's. */
-  constructor({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log }) {
-    Object.assign(this, { loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log });
+  /** The functions are injected (main.js passes the real ones, tests fakes); `log(level, message, data)` is log.js's.
+   *  `active()`: whether this copy acts. Every launcher block's copy runs a watcher and a hidden one keeps ticking, so
+   *  main.js passes one that is true only for the copy in the chosen slot. */
+  constructor({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active = () => true }) {
+    Object.assign(this, { loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active });
     this.seen = new Set();
     this.configWarned = false; // a bad data file is toasted once, then only logged
   }
@@ -27,11 +29,14 @@ export class Watcher {
     cx.timer.every(TICK_MS, (cx) => this.tick(cx));
   }
 
-  /** Queues each space not seen before, as it is now (its folder is read here, once). Never waits. */
+  /** Queues each space not seen before, as it is now (its folder is read here, once). Never waits. While inactive a new
+   *  space is only marked seen: the active copy handles it, and it is never picked up later. */
   tick(cx) {
+    const active = this.active();
     for (const space of spaces()) {
       if (this.seen.has(space.id)) continue;
       this.seen.add(space.id);
+      if (!active) continue;
       const job = queue.then(() => this.consider(space));
       queue = job.catch(() => {});
       cx.spawn(() => job);
