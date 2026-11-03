@@ -380,7 +380,7 @@ test("buildWorkspace records the folder it is opening in projects.opening before
   assert.ok("/recent" in opening);
 });
 
-const existingSpace = (dir) => { state.spaces.push({ id: "spX", name: "S", folder: dir, machine: null }); state.terminals.push({ address: "tX", cwd: dir, state: "live", status: null }); };
+const existingSpace = (dir, over = {}) => { state.spaces.push({ id: "spX", name: "S", folder: dir, machine: null, active: true, ...over }); state.terminals.push({ address: "tX", cwd: dir, state: "live", status: null }); };
 const existing = (dir, agent) => ({ space: "spX", tab: "tbX", pane: "paneX", terminal: "tX", folder: dir, agent });
 
 test("existing shell space, after timing: the chain-then-agent line is typed into the shell once it is in front, no space.new", async () => {
@@ -404,7 +404,7 @@ test("existing shell space, with timing: exec agent is typed and the chain goes 
   const notes = [];
   await W.buildWorkspace({ project: p, folder: dir, name: "ignored", tabs: p.startup.tabs, prompt: "", agentTiming: "with", chain: "true", log: (m) => notes.push(m), existing: existing(dir, false) });
   assert.equal(spaceNews().length, 0);
-  assert.deepEqual(state.sent, [{ terminal: "tX", text: "exec 'claude'" }]);
+  assert.deepEqual(state.sent, [{ terminal: "tX", text: `cd '${dir}' && exec 'claude'` }]);
   const setup = state.hcRuns.find((r) => r.args.includes("herdr.space=spX"));
   assert.ok(setup, JSON.stringify(state.hcRuns));
   assert.match(setup.args.at(-1), /^true \|\| exec "\$SHELL"$/);
@@ -416,7 +416,7 @@ test("existing shell space: a command pane types its command, a shell pane types
   existingSpace(dir);
   const cmd = mk({ type: "command", command: "npm run dev" });
   await W.buildWorkspace({ project: cmd, folder: dir, name: "S", tabs: cmd.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, false) });
-  assert.deepEqual(state.sent, [{ terminal: "tX", text: "npm run dev" }]);
+  assert.deepEqual(state.sent, [{ terminal: "tX", text: `cd '${dir}' && npm run dev` }]);
   reset(); state.foreground = "zsh"; existingSpace(dir);
   const sh = mk({ type: "shell" });
   await W.buildWorkspace({ project: sh, folder: dir, name: "S", tabs: sh.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, false) });
@@ -433,6 +433,7 @@ test("existing agent space: nothing is typed, timing is forced with, the plan's 
   assert.ok(state.hcRuns.some((r) => r.args.includes("herdr.space=spX")), "the chain runs in a setup terminal");
   assert.deepEqual(state.tabsMade.map((t) => [t.name, t.argv]), [["agent", undefined]]);
   assert.deepEqual(state.runs.filter((r) => r.command === "pane.focus").map((r) => r.args), [{ pane: "paneX" }]);
+  assert.deepEqual(state.renames.filter((r) => r.id === "tbX"), [], "an adopted agent's tab keeps its name");
 });
 test("existing agent space with the agent at the first pane: nothing typed, the rest still splits", async () => {
   const dir = realpathSync(makeRepo()); state.foreground = "zsh";
@@ -447,9 +448,12 @@ test("existing shell space whose shell never comes to the front: the line is ski
   const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }, { type: "shell", direction: "down" }] }] } });
   existingSpace(dir);
   const errors = []; const origError = console.error; console.error = (m) => errors.push(String(m));
+  const saved = { ...W.typeSettings }; Object.assign(W.typeSettings, { tries: 3, seconds: 0.05 });
+  let built;
   try {
-    await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, false) });
-  } finally { console.error = origError; }
+    built = await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, false) });
+  } finally { console.error = origError; Object.assign(W.typeSettings, saved); }
+  assert.equal(built.problems, 1, "the skipped line is a problem");
   assert.deepEqual(state.sent, []);
   assert.equal(state.splits.length, 1);
   assert.equal(state.splits[0].pane, "paneX");
@@ -462,4 +466,85 @@ test("a worktree launch that opens the repo's space first marks both folders as 
   assert.deepEqual(spaceNews().map((r) => r.args.folder), [dir, wt]);
   const opening = shared("projects.opening");
   for (const f of [dir, wt]) assert.ok(opening[f] >= started && opening[f] <= Date.now(), `${f}: ${JSON.stringify(opening)}`);
+});
+
+/** buildWorkspace into the existing space spX, with console.error and console.log captured. */
+async function buildExisting(p, dir, agent = false, over = {}) {
+  const out = []; const orig = [console.error, console.log];
+  console.error = (m) => out.push(String(m)); console.log = (m) => out.push(String(m));
+  try {
+    const built = await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, agent), ...over });
+    return { built, out };
+  } finally { [console.error, console.log] = orig; }
+}
+const twoPane = (dir) => normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }, { type: "shell", direction: "down" }] }, { name: "git", command: "lazygit" }] } });
+
+test("an existing space that gained a second tab before the build's turn is left alone", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  existingSpace(dir, { tabs: [{ id: "tbX", name: "1", panes: 1 }, { id: "tbY", name: "2", panes: 1 }] });
+  const { built, out } = await buildExisting(twoPane(dir), dir, false, { chain: "true" });
+  assert.deepEqual(built, { space: "spX", agentTerminal: null, problems: 1, skipped: true });
+  assert.deepEqual([state.sent, state.splits, state.tabsMade, state.hcRuns, state.renames], [[], [], [], [], []]);
+  assert.equal(state.runs.length, 0);
+  assert.ok(out.some((l) => /changed before/.test(l)), out.join(" | "));
+});
+test("an existing space that closed before the build's turn is left alone", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  const { built } = await buildExisting(twoPane(dir), dir);
+  assert.equal(built.skipped, true);
+  assert.deepEqual([state.sent, state.splits, state.tabsMade], [[], [], []]);
+});
+test("a shell with something typed at its prompt gets nothing typed, and that is logged", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh"; state.screen = "last login\n$ git st\n\n";
+  existingSpace(dir);
+  const saved = { ...W.typeSettings }; Object.assign(W.typeSettings, { tries: 3, seconds: 0.05 });
+  try {
+    const { built, out } = await buildExisting(twoPane(dir), dir);
+    assert.deepEqual(state.sent, []);
+    assert.ok(out.some((l) => /couldn't type into the new space's shell/.test(l)), out.join(" | "));
+    assert.equal(built.problems, 1);
+    assert.equal(state.splits.length, 1, "the rest still builds");
+  } finally { Object.assign(W.typeSettings, saved); }
+});
+test("a shell at a bare prompt gets the line typed", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh"; state.screen = "last login\n~/repo % \n\n";
+  existingSpace(dir);
+  const { built } = await buildExisting(twoPane(dir), dir);
+  assert.deepEqual(state.sent, [{ terminal: "tX", text: `cd '${dir}' && exec 'claude'` }]);
+  assert.equal(built.problems, 0);
+});
+test("the adopted shell's tab is renamed to the plan's first tab name; the same name is left as is", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  existingSpace(dir);
+  await buildExisting(twoPane(dir), dir);
+  assert.deepEqual(state.renames, [{ id: "tbX", name: "agent" }]);
+  reset(); state.foreground = "zsh";
+  existingSpace(dir, { tabs: [{ id: "tbX", name: "agent", panes: 1 }] });
+  await buildExisting(twoPane(dir), dir);
+  assert.deepEqual(state.renames, []);
+});
+test("an existing space that is not the shown one keeps the person's focus", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  existingSpace(dir, { active: false });
+  await buildExisting(twoPane(dir), dir);
+  assert.equal(state.runs.some((r) => r.command === "pane.focus"), false);
+});
+test("problems counts a failed split and a setup terminal that did not start", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  existingSpace(dir);
+  state.splitFails = true; state.hcRunFails = true;
+  const { built } = await buildExisting(twoPane(dir), dir, false, { chain: "true", agentTiming: "with" });
+  // the failed split and the setup terminal (the stub's tab.new still succeeds)
+  assert.equal(built.problems, 2);
+  assert.equal(built.skipped, undefined);
+});
+test("a setup tab that ends before its rename is logged at debug, not as an error", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  state.hcRunHidesTab = true;
+  const errors = []; const orig = console.error; console.error = (m) => errors.push(String(m));
+  try {
+    await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "with", chain: "true", log: () => {} });
+  } finally { console.error = orig; }
+  assert.deepEqual(errors.filter((e) => /setup tab/.test(e)), []);
 });

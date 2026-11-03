@@ -121,13 +121,13 @@ async function readEnv() {
 /** The agent's command line (its name and arguments); empty for any other pane, or an agent pane with no agent. */
 const agentArgv = (pane) => (pane.type === "agent" ? [...splitArgs(pane.agent), ...splitArgs(pane.args)] : []);
 
-/** The reply of an `herdr-app do` call, or null when it failed. */
-async function appDo(command, args, what) {
+/** The reply of an `herdr-app do` call, or null when it failed (logged at `level`). */
+async function appDo(command, args, what, level = "error") {
   const r = await exec("herdr-app", ["do", command, JSON.stringify(args)]);
   let made = {};
   try { made = JSON.parse(r.stdout || "{}"); } catch {}
   if (r.code !== 0 || made.error) {
-    diag("error", `couldn't ${command} for ${what}`, { code: r.code, error: made.error ?? r.stderr.split("\n")[0] });
+    diag(level, `couldn't ${command} for ${what}`, { code: r.code, error: made.error ?? r.stderr.split("\n")[0] });
     return null;
   }
   return made;
@@ -146,27 +146,49 @@ async function tabShown(space, tab) {
   return false;
 }
 
-/** Types a shell `line` into `terminal` (hc send pastes it and presses Enter) once a shell is the
- *  foreground program; when no shell comes to the front within 10 s the line is skipped and logged. */
+// How long typeLine waits for a shell at a bare prompt: `tries` looks, `seconds` apart (10 s).
+export const typeSettings = { tries: 20, seconds: 0.5 };
+
+/** Whether the terminal's last non-empty line is a prompt with nothing typed after it. */
+async function atBarePrompt(terminal) {
+  try {
+    const r = await hc(["read", terminal]);
+    if (r.code !== 0) return false;
+    const last = r.stdout.split("\n").map((l) => l.replace(/\s+$/, "")).filter(Boolean).pop() ?? "";
+    return /[$%>#]$/.test(last);
+  } catch { return false; }
+}
+
+/** Types a shell `line` into `terminal` (hc send pastes it and presses Enter) once a shell is the foreground program
+ *  and sits at a bare prompt, so the line never joins something the person is typing; when that doesn't happen
+ *  within typeSettings the line is skipped and logged. Resolves to whether the line was sent. */
 async function typeLine(terminal, line) {
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < typeSettings.tries; i++) {
     let fg = null;
     try { fg = JSON.parse((await hc(["get", terminal, "--json"])).stdout).foreground?.name ?? null; } catch {}
-    if (SHELLS.has(fg)) {
+    if (SHELLS.has(fg) && (await atBarePrompt(terminal))) {
       const r = await hc(["send", terminal, "--", line]);
       if (r.code !== 0) diag("error", `hc send failed: ${r.stderr.split("\n")[0]}`, { terminal });
-      return;
+      return r.code === 0;
     }
-    await sleep(0.5);
+    await sleep(typeSettings.seconds);
   }
-  diag("error", "couldn't type into the new space's shell", { terminal, line });
+  diag("error", "couldn't type into the new space's shell: no shell at a bare prompt", { terminal, line });
+  return false;
 }
 
 /** The space, first pane and first terminal of a space the app already made (the watcher's case), in the
- *  shape the space.new path finds; a plain shell there is given pane (0,0)'s line, an agent is left alone. */
+ *  shape the space.new path finds; a plain shell there is given pane (0,0)'s line, an agent is left alone.
+ *  Checked again here, holding the lock: a space that closed or no longer has one tab with one pane is
+ *  left alone (`skipped`). `typed` is false when the line was skipped; `tabName` is the tab's name now. */
 async function adoptExisting(existing, line) {
-  if (!existing.agent && line) await typeLine(existing.terminal, line);
-  return { space: existing.space, pane: existing.pane, terminal: existing.terminal ?? null };
+  const now = spaces().find((s) => s.id === existing.space);
+  if (!now || now.tabs?.length !== 1 || now.tabs[0].panes !== 1) {
+    diag("info", "watcher: left alone, the space changed before the build", { space: existing.space, tabs: now?.tabs?.length ?? null });
+    return { skipped: true };
+  }
+  const typed = !existing.agent && line ? await typeLine(existing.terminal, line) : true;
+  return { space: existing.space, pane: existing.pane, terminal: existing.terminal ?? null, typed, tabName: now.tabs[0].name };
 }
 
 /** Runs the setup chain in its own tab of `space` (a labeled `hc run`, which herdr shows as a tab there),
@@ -181,29 +203,34 @@ async function startSetupTerminal(space, folder, chain, log) {
     log(`setup did not start: ${why}`);
     return false;
   }
-  if (!(await tabShown(space, tabId))) diag("error", "setup tab not renamed: it never showed up", { space, tab: tabId });
-  else await appDo("tab.rename", { id: tabId, name: "setup" }, "the setup tab");
+  // A short chain can end (and its tab close) before the rename: not an error.
+  if (!(await tabShown(space, tabId))) diag("debug", "setup tab not renamed: it never showed up", { space, tab: tabId });
+  else await appDo("tab.rename", { id: tabId, name: "setup" }, "the setup tab", "debug");
   return true;
 }
 
 /** Hands a send-mode prompt to a detached helper that types it once the agent (behind its setup chain) is ready;
  *  `program` is the agent's program name, which the helper waits to see in front when herdr reports no status. */
 async function startPromptHelper(terminal, prompt, program) {
-  if (!terminal) return diag("error", "prompt not sent: couldn't find the new terminal");
+  if (!terminal) { diag("error", "prompt not sent: couldn't find the new terminal"); return false; }
   const file = `${appHome()}/data/projects/prompt-${Date.now()}.txt`;
-  try { await writeTextFile(file, prompt, null); } catch (e) { return diag("error", `prompt not sent: ${e.message}`, { file }); }
+  try { await writeTextFile(file, prompt, null); } catch (e) { diag("error", `prompt not sent: ${e.message}`, { file }); return false; }
   const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--", "sh", `${appHome()}/mods/projects/bin/send-prompt.sh`, terminal, file, program]);
   if (r.code !== 0) {
     diag("error", `couldn't start the prompt helper: ${r.stderr.split("\n")[0]}`, { terminal });
     await exec("rm", ["-f", file]).catch(() => {});
+    return false;
   }
+  return true;
 }
 
 /** Opens `folder` as a space with the project's tabs, each tab's panes split as planned, and starts the first agent
  *  (with `prompt`, which no other pane gets). Throws before creating anything when the tabs can't be built or a folder is missing.
  *  `chain` (the setup commands, or "") runs before the agent in its own pane when `agentTiming` is "after",
  *  or beside it in a setup tab when "with" (or when there is no agent).
- *  Returns the new space and the first agent's terminal when it is known. */
+ *  Returns the new space, the first agent's terminal when it is known, and `problems`: how many parts didn't happen
+ *  (a typed line skipped, a failed split or tab, the setup terminal or prompt helper not started). Building into an
+ *  `existing` space that changed before the lock was ours builds nothing and returns `skipped: true`. */
 export async function buildWorkspace({ project, folder, name, tabs, prompt, agentTiming = "with", chain = "", log, existing = null }) {
   const plan = tabPlan(tabs);
   // Building into a space the app already made: no prompt; an agent already running there is the plan's
@@ -244,15 +271,17 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     if (after && isLead(ti, pi)) return ["sh", "-c", chainThenAgent(chain, argv, arg ? prompt : "", dirs[ti][pi])];
     return argv.length && arg && isLead(ti, pi) && !isFirst(ti, pi) ? [...argv, prompt] : argv;
   };
-  /** Pane (0,0)'s program as a line typed into a plain shell: the chain-then-agent line, `exec` the agent,
-   *  or the command; "" for a shell pane. */
+  /** Pane (0,0)'s program as a line typed into a plain shell: the chain-then-agent line (it changes into the
+   *  pane's folder itself), or `cd` to the pane's folder and then `exec` the agent or run the command; "" for a shell pane. */
   const lineOf00 = () => {
     const pane = plan[0].panes[0];
-    if (pane.type === "command") return pane.command;
+    const cd = `cd ${shq(dirs[0][0])} && `;
+    if (pane.type === "command") return cd + pane.command;
     const argv = argvOf(0, 0);
     if (after && isLead(0, 0)) return argv[2];
-    return argv.length ? `exec ${argv.map(shq).join(" ")}` : "";
+    return argv.length ? `${cd}exec ${argv.map(shq).join(" ")}` : "";
   };
+  let problems = 0;
 
   /** Splits a tab's first pane into the rest of its panes; a failed split ends this tab's panes. */
   async function splitTab(ti, root, rootTerminal) {
@@ -262,7 +291,7 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     for (let pi = 1; pi < t.panes.length; pi++) {
       const pane = t.panes[pi];
       const made = await appDo("pane.split", { direction: pane.direction, pane: ids[pane.from], argv: inFolder(dirs[ti][pi], argvOf(ti, pi)) }, `${t.name} ${pane.name}`);
-      if (!made?.pane) break;
+      if (!made?.pane) { problems++; break; }
       ids[pane.name] = made.pane;
       terminals[pane.name] = made.terminal ?? null;
     }
@@ -302,8 +331,13 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     return here;
   }
 
-  const { space, agentTerminal, focusPane } = await exclusive(async () => {
+  const { space, agentTerminal, focusPane, skipped } = await exclusive(async () => {
     const here = existing ? await adoptExisting(existing, lineOf00()) : await openSpace();
+    if (here?.skipped) return { skipped: true };
+    if (here?.typed === false) problems++;
+    // The adopted shell's tab takes the plan's first tab name, as a space.new {tab} would have (best effort). An
+    // adopted agent's tab keeps its name: the plan may put its agent in another tab.
+    if (existing && !existing.agent && here.tabName !== plan[0].name) await appDo("tab.rename", { id: existing.tab, name: plan[0].name }, "the adopted tab");
     const space = here?.space ?? null;
     const firstTerminal = here?.terminal ?? null;
     const paneIds = [];
@@ -321,31 +355,35 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     if (!here) diag("error", "tab 1's splits and the later tabs skipped: couldn't find the new space", { name, tabs: plan.length });
     else {
       paneIds[0] = here.pane;
-      try { noteAgent(0, await splitTab(0, here.pane, firstTerminal)); } catch (e) { diag("error", `tab 1: ${e.message}`); }
+      try { noteAgent(0, await splitTab(0, here.pane, firstTerminal)); } catch (e) { problems++; diag("error", `tab 1: ${e.message}`); }
     }
     for (let ti = 1; here && ti < plan.length; ti++) {
       try {
         const t = plan[ti];
         const argv = argvOf(ti, 0);
         const made = await appDo("tab.new", { space, name: t.name, folder: dirs[ti][0], ...(argv.length ? { argv } : {}) }, t.name);
-        if (!made) continue;
+        if (!made) { problems++; continue; }
         const root = await findTabPane(space, made.tab);
-        if (!root) { diag("error", `tab "${t.name}": couldn't find its first pane`); continue; }
+        if (!root) { problems++; diag("error", `tab "${t.name}": couldn't find its first pane`); continue; }
         paneIds[ti] = root;
         noteAgent(ti, await splitTab(ti, root, made.terminal ?? null));
-      } catch (e) { diag("error", `tab "${plan[ti].name}": ${e.message}`); }
+      } catch (e) { problems++; diag("error", `tab "${plan[ti].name}": ${e.message}`); }
     }
     return { space, agentTerminal, focusPane: agentPane ?? paneIds[0] ?? null };
   });
-  if (focusPane) run("pane.focus", { pane: focusPane });
+  if (skipped) return { space: existing.space, agentTerminal: null, problems: 1, skipped: true };
+  // A space the watcher built in the background keeps the person where they are unless it is the shown one.
+  if (focusPane && (!existing || spaces().find((s) => s.id === space)?.active)) run("pane.focus", { pane: focusPane });
   if (after) log("setup continues in the agent pane");
   else if (chain) {
     if (!space) {
+      problems++;
       diag("error", "setup not run: couldn't find the new space", { folder });
       log("setup did not start: couldn't find the new space");
     } else if (await startSetupTerminal(space, folder, chain, log)) log("setup runs in the setup tab");
+    else problems++;
   }
-  if (send && after) await startPromptHelper(agentTerminal, prompt, commandName(lead.pane.agent));
+  if (send && after) { if (!(await startPromptHelper(agentTerminal, prompt, commandName(lead.pane.agent)))) problems++; }
   else if (send) await sendWhenReady(agentTerminal, dirs[lead.tab][lead.index], prompt);
-  return { space, agentTerminal };
+  return { space, agentTerminal, problems };
 }
