@@ -20,7 +20,9 @@ The picker's **Launcher: add to layout** button writes a copy of the shown layou
 
 Auto-layout sets up a space you open outside the picker (the app's New space, or New worktree from its menu) the way the picker would. To turn it on: put the launcher button in the layout (Launcher in the picker's toolbar, any place but off), then switch **Auto-layout** on in the project's editor. Only one project per repo can have it; turning it on moves it from the other with a toast.
 
-When a new space appears (a 2 s poll; switching to a space does nothing, and spaces open at app start are left alone) whose folder is the project's checkout or one of its worktrees, has one tab with one pane, and that pane is a shell or a running agent, the watcher builds the project's tabs into it. A running agent stays and setup runs beside it in a "setup" tab; a shell gets the agent line typed into it. A worktree new to the project also gets `copy` and `worktree.setup`; the checkout gets only `startup.setup`. There is no prompt.
+When a new space appears (a 2 s poll; switching to a space does nothing, and spaces open at app start, or restored while the app loads, are left alone) whose folder is the project's checkout or one of its worktrees, has one tab with one pane, and that pane is a shell or an agent (one still at its trust prompt counts), the watcher builds the project's tabs into it. A running agent stays and setup runs beside it in a "setup" tab; a shell gets the agent line typed into it, but only at a bare prompt: if you have started typing there, the line is skipped and the toast counts it as a problem. A worktree new to the project also gets `copy` and `worktree.setup`; the checkout gets only `startup.setup`. There is no prompt. A project in a subfolder of its repo is built in that subfolder, of the checkout or of the worktree.
+
+The watcher runs in the launcher block's copy of the mod, and a copy runs only once its block has been drawn: if the chosen place's block never shows in a session (the sidebar collapsed since startup, with the button in the sidebar), there is no watcher until it does. Pick the status bar or tab bar if you keep the sidebar collapsed.
 
 Repos that are not projects can be covered by an `autoLayouts` list at the top level of `projects.json`, and `defaultAgent` fills agent panes in those layouts. Both are JSON-only (no editor):
 
@@ -35,7 +37,7 @@ Repos that are not projects can be covered by an `autoLayouts` list at the top l
 }
 ```
 
-`repo` is a repo name or `*`, `branch` is optional, `layout` is a pane layout by name. The best match wins: repo and branch, then repo, then `*` with branch, then `*`. These layouts get tabs and panes only, no copy or setup.
+`repo` is a repo name or `*`, `branch` is optional, `layout` is a layout by name: a panes layout (one tab) or a tabs layout. The best match wins: repo and branch, then repo, then `*` with branch, then `*`. These layouts get tabs and panes only, no copy or setup. A repo that is a project is never covered by this list, even with the project's auto-layout off.
 
 ## Projects file
 
