@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, matchAutoLayout, tabsForAuto, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix } from "../mods/projects/lib.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -656,4 +656,24 @@ test("setupSummary counts copy and setup and names the timing", () => {
 
 test("a setup command containing ;; stays one element", () => {
   assert.deepEqual(normalize({ path: "/a", startup: { setup: ["case x in a) ;; esac"] } }).startup.setup, ["case x in a) ;; esac"]);
+});
+
+test("normalize fills autoLayout", () => { assert.equal(normalize({ path: "/a" }).worktree.autoLayout, false); assert.equal(normalize({ path: "/a", worktree: { autoLayout: 1 } }).worktree.autoLayout, true); });
+test("matchAutoLayout picks the most specific entry, ties by order", () => {
+  const e = [{ repo: "*", branch: "", layout: "any" }, { repo: "*", branch: "release", layout: "rel" }, { repo: "API", branch: "", layout: "api" }, { repo: "api", branch: "release", layout: "api-rel" }, { repo: "api", branch: "", layout: "api2" }];
+  assert.equal(matchAutoLayout(e, "api", "release").layout, "api-rel");
+  assert.equal(matchAutoLayout(e, "api", "main").layout, "api");
+  assert.equal(matchAutoLayout(e, "web", "release").layout, "rel");
+  assert.equal(matchAutoLayout(e, "web", "main").layout, "any");
+  assert.equal(matchAutoLayout([], "web", "main"), null);
+});
+test("tabsForAuto: a project gives its own tabs; a panes layout becomes one tab; agent panes take defaultAgent or become shells", () => {
+  const p = normalize({ path: "/a", startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "codex" }] }] } });
+  assert.equal(tabsForAuto({ project: p, layouts: [] })[0].panes[0].agent, "codex");
+  const layouts = [{ name: "side", panes: [{ type: "agent" }, { type: "shell", direction: "right" }] }, { name: "full", tabs: [{ name: "a", panes: [{ type: "agent" }] }, { name: "git", command: "lazygit" }] }];
+  const side = tabsForAuto({ layouts, entry: { repo: "*", branch: "", layout: "side" }, defaultAgent: { agent: "claude", args: "-q" } });
+  assert.deepEqual([side.length, side[0].name, side[0].panes[0].agent, side[0].panes[0].args], [1, "agent", "claude", "-q"]);
+  const full = tabsForAuto({ layouts, entry: { repo: "*", branch: "", layout: "full" }, defaultAgent: null });
+  assert.deepEqual([full.length, full[0].panes[0].type, full[1].command], [2, "shell", "lazygit"]);
+  assert.throws(() => tabsForAuto({ layouts, entry: { repo: "*", branch: "", layout: "nope" } }), /No layout called "nope"/);
 });

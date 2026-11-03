@@ -9,7 +9,7 @@ const file = `${state.appHome}/data/projects.json`;
 
 test("a missing file is an empty list", async () => {
   reset();
-  assert.deepEqual(await loadConfig(), { projects: [], layouts: [], gitInfo: true, hideTemplate: false, raw: null });
+  assert.deepEqual(await loadConfig(), { projects: [], layouts: [], gitInfo: true, hideTemplate: false, autoLayouts: [], defaultAgent: null, raw: null });
 });
 
 test("save then load round-trips and fills defaults", async () => {
@@ -88,4 +88,18 @@ test("loadConfig hands the file's layouts to normalize, so a legacy layout name 
   writeFileSync(`${state.appHome}/data/projects.json`, JSON.stringify({ layouts: [{ name: "mine", panes: [{ type: "agent" }, { type: "shell", direction: "right" }] }], projects: [{ name: "a", path: "/a", startup: { agent: "claude", layout: "mine" } }] }));
   const c = await loadConfig();
   assert.equal(c.projects[0].startup.tabs[0].panes.length, 2);
+});
+
+test("loadConfig reads autoLayouts and defaultAgent with defaults, and saveConfig keeps them", async () => {
+  writeFileSync(file, JSON.stringify({ projects: [], autoLayouts: [{ layout: "x" }, { repo: " api ", branch: "main", layout: "y" }, { repo: "z" }], defaultAgent: { agent: "claude" } }));
+  const loaded = await loadConfig();
+  assert.deepEqual(loaded.autoLayouts, [{ repo: "*", branch: "", layout: "x" }, { repo: "api", branch: "main", layout: "y" }]);
+  assert.deepEqual(loaded.defaultAgent, { agent: "claude", args: "" });
+  await saveConfig([{ name: "api", path: "/r/api" }], loaded.raw);
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(data.autoLayouts.length, 3);
+  assert.equal(data.defaultAgent.agent, "claude");
+  writeFileSync(file, JSON.stringify({ projects: [], defaultAgent: { agent: "" } }));
+  const bare = await loadConfig();
+  assert.deepEqual([bare.autoLayouts, bare.defaultAgent], [[], null]);
 });

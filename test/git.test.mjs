@@ -357,3 +357,25 @@ test("an invalid verbatim branch is refused with git's reason", async () => {
   await assert.rejects(G.createWorktree(p, "a//b", note), /is not a valid branch name/);
   await assert.rejects(G.createWorktree(p, "x/y.lock", note), /is not a valid branch name/);
 });
+
+// ---------------------------------------------------------------- repoKey, branchOf
+
+test("repoKey is the same for a checkout and its linked worktree, and null outside a repo", async () => {
+  const dir = makeRepo();
+  const wt = join(scratch("pp-wt"), "feat");
+  sh(dir, "worktree", "add", "-q", "-b", "feat", wt);
+  const key = await G.repoKey(dir);
+  assert.ok(key);
+  assert.equal(await G.repoKey(wt), key);
+  assert.equal(await G.repoKey(join(dir, ".git", "..")), key);
+  assert.equal(await G.repoKey(scratch()), null);
+});
+
+test("branchOf reports the checked-out branch", async () => {
+  const dir = makeRepo();
+  const wt = join(scratch("pp-wt"), "feat");
+  sh(dir, "worktree", "add", "-q", "-b", "feat", wt);
+  assert.equal(await G.branchOf(dir), "main");
+  assert.equal(await G.branchOf(wt), "feat");
+  assert.equal(await G.branchOf(scratch()), null);
+});

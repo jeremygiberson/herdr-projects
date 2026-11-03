@@ -123,6 +123,7 @@ export function blankProject(path = "") {
       root: "~/.herdr/worktrees/{repo}/{branch}",
       spaceName: "{name} · {branch}",
       repoSpace: false,
+      autoLayout: false,
       copy: [],
       setup: [],
     },
@@ -180,6 +181,7 @@ export function normalize(p, layouts = []) {
   startup.setup = cleanList(startup.setup);
   startup.quickSetup = Boolean(startup.quickSetup);
   const worktree = { ...b.worktree, ...(p?.worktree ?? {}) };
+  worktree.autoLayout = Boolean(worktree.autoLayout);
   worktree.copy = cleanList(worktree.copy);
   worktree.setup = cleanList(worktree.setup);
   return {
@@ -243,6 +245,43 @@ export function tabsForLaunch(project, layouts, pick) {
     panes: t.panes.map((x, i) => {
       if (x.type !== "agent" || x.agent.trim()) return x;
       if (src) return { ...x, agent: src.agent, args: src.args, prompt: src.prompt, promptMode: src.promptMode };
+      const firstOfTab = t.panes.findIndex((y) => y.type === "agent") === i;
+      return { ...x, type: "shell", name: x.name || (firstOfTab ? "agent" : "") };
+    }),
+  }));
+}
+
+/** The best auto-layout entry for a repo name and branch: repo+branch > repo > "*"+branch > "*"; repo compares
+ *  case-insensitively; ties go to the earlier entry. null when none applies. */
+export function matchAutoLayout(entries, repo, branch) {
+  const r = String(repo ?? "").toLowerCase();
+  let best = null;
+  let bestScore = 0;
+  for (const e of entries ?? []) {
+    const er = String(e.repo ?? "*").toLowerCase();
+    const eb = String(e.branch ?? "");
+    if (er !== "*" && er !== r) continue;
+    if (eb && eb !== branch) continue;
+    const score = (er === "*" ? 0 : 2) + (eb ? 2 : 0) + (er === "*" && !eb ? 1 : 0) + (er !== "*" && !eb ? 1 : 0);
+    if (score > bestScore) { best = e; bestScore = score; }
+  }
+  return best;
+}
+
+/** The tabs for a space opened outside the picker: a known project's own, else the entry's layout. An agent pane
+ *  left empty takes `defaultAgent`, else is a shell. Throws `No layout called "<name>"`. */
+export function tabsForAuto({ project, layouts, entry, defaultAgent }) {
+  if (project) return tabsForLaunch(project, layouts, "");
+  const layout = allLayouts(layouts).find((l) => l.name === entry?.layout);
+  if (!layout) throw new Error(`No layout called "${entry?.layout}"`);
+  const tabs = Array.isArray(layout.tabs)
+    ? layout.tabs.map(fillTab)
+    : [{ name: "agent", folder: "", command: "", panes: layout.panes.map(blankPane) }];
+  return tabs.map((t) => ({
+    ...t,
+    panes: t.panes.map((x, i) => {
+      if (x.type !== "agent" || x.agent.trim()) return x;
+      if (defaultAgent?.agent) return { ...x, agent: defaultAgent.agent, args: defaultAgent.args ?? "" };
       const firstOfTab = t.panes.findIndex((y) => y.type === "agent") === i;
       return { ...x, type: "shell", name: x.name || (firstOfTab ? "agent" : "") };
     }),

@@ -137,6 +137,24 @@ async function realPath(p) {
   } catch { return p; }
 }
 
+/** A key shared by a checkout and its linked worktrees: the real path of the common git dir; null outside a repo. */
+export async function repoKey(folder) {
+  try {
+    const r = await git(folder, ["rev-parse", "--git-common-dir"]);
+    if (r.code !== 0 || !out(r)) return null;
+    const dir = out(r);
+    return await realPath(dir.startsWith("/") ? dir : `${folder}/${dir}`);
+  } catch { return null; }
+}
+
+/** The branch checked out in a folder ("HEAD" when detached); null outside a repo. */
+export async function branchOf(folder) {
+  try {
+    const r = await git(folder, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    return r.code === 0 && out(r) ? out(r) : null;
+  } catch { return null; }
+}
+
 /** The open space showing the project: one in its folder, else one below it (a first tab with a folder opens there). */
 export function findSpace(project) {
   const folder = projectFolder(project);
