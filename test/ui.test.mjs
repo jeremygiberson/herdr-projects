@@ -1799,3 +1799,35 @@ test("a startup setup command containing ;; survives opening and saving the edit
   await v.save(cx);
   assert.deepEqual(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.setup, ["case x in a) ;; esac"]);
 });
+
+const tap = (v, cx, id) => findAll(rendered(v), (e) => e.op?.("id")?.[0] === id)[0].op("on_click")[0]({}, cx);
+const AL = { worktree: { autoLayout: true } };
+test("the auto-layout toggle is saved", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir)]);
+  press(v, cx, "e", { alt: true }); v.showSection("worktree");
+  tap(v, cx, "pp-autolayout");
+  await v.save(cx);
+  assert.equal(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].worktree.autoLayout, true);
+});
+test("saving a project with auto-layout on turns it off on another project of the same repo, with one toast", async () => {
+  const dir = realpathSync(makeRepo());
+  const other = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("old", dir, AL), proj("new", dir), proj("elsewhere", other, AL)]);
+  v.at = 1; press(v, cx, "e", { alt: true }); v.showSection("worktree");
+  tap(v, cx, "pp-autolayout");
+  await v.save(cx);
+  const saved = JSON.parse(readFileSync(dataFile(), "utf8")).projects;
+  assert.deepEqual(saved.map((p) => p.worktree.autoLayout), [false, true, true]);
+  assert.deepEqual(state.notified, [{ title: "Projects", body: "Auto-layout moved from old to new" }]);
+});
+test("the card tags an auto-layout project and hints when the Projects button is not in the layout", async () => {
+  const { v } = await open([proj("a", "/r/a", AL)]);
+  state.layout = null; v.refreshSnap();
+  assert.match(texts(v), /auto-layout/);
+  assert.match(texts(v), /auto-layout needs the Projects button in the layout \(Launcher: /);
+  state.layout = { id: "root", children: [{ id: "projects-launch-sidebar" }] }; setShared("projects.launcher", "sidebar");
+  assert.doesNotMatch(texts(v), /needs the Projects button/);
+  setShared("projects.launcher", "off");
+  assert.match(texts(v), /needs the Projects button in the layout \(Launcher: off\)/);
+});

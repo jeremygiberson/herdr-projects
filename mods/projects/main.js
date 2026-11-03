@@ -5,7 +5,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
-import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec } from "herdr";
+import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec, notify } from "herdr";
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
 import { inspect, repoKey, branchOf, realPath, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
 import { buildWorkspace } from "./workspace.js";
@@ -635,7 +635,19 @@ export default class ProjectPresets extends View {
       }
       const list = [...this.projects];
       if (this.index == null) list.push(d); else list[this.index] = d;
+      // One auto-layout project per repo: the one just saved takes it from any other on the same repo.
+      const moved = [];
+      if (d.worktree.autoLayout && !d.template) {
+        const key = await repoKey(projectFolder(d));
+        if (key) {
+          for (const q of list) {
+            if (q === d || q.template || !q.worktree.autoLayout) continue;
+            if ((await repoKey(projectFolder(q))) === key) { q.worktree.autoLayout = false; moved.push(q.name); }
+          }
+        }
+      }
       this.raw = await saveConfig(list, this.raw);
+      for (const name of moved) notify({ title: "Projects", body: `Auto-layout moved from ${name} to ${d.name}` });
       this.projects = list;
       this.syncTemplate();
       this.mode = "list";
@@ -1282,6 +1294,7 @@ export default class ProjectPresets extends View {
         .child(kv("Tabs", tabLabels(p.startup.tabs).join(" · ")))
         .child(kv("Setup", setupSummary(p)))
         .child(kv("Worktrees", enterAction(p.worktree.mode, p.quickLaunch)[0]))
+        .child(kv("Auto-layout", p.worktree.autoLayout ? "on" : "off"))
         .when(Boolean(p.group), (el) => el.child(kv("Group", p.group))))
       .child(h_flex().gap(8).items_center().flex_wrap()
         .child(this.button(t, "pp-use", "Use template", true, () => { this.duplicateSelected(); cx.notify(); })));
@@ -1309,7 +1322,8 @@ export default class ProjectPresets extends View {
         .child(this.avatar(t, p, r.space, 24))
         .child(div().text_size(16).font_semibold().text_color(t.foreground).child(p.name))
         .when(Boolean(r.space), (el) => el.child(this.tag(t, r.space.status === "working" ? "agent working" : "open", r.space.status === "working" ? t.working : t.done)))
-        .when(p.pinned, (el) => el.child(this.tag(t, "pinned", t.dim, t.input))))
+        .when(p.pinned, (el) => el.child(this.tag(t, "pinned", t.dim, t.input)))
+        .when(p.worktree.autoLayout, (el) => el.child(this.tag(t, "auto-layout", t.accent))))
       .child(v_flex().gap(4)
         .when(Boolean(p.description), (el) => el.child(div().text_size(12).text_color(t.dim).child(p.description)))
         .child(kv("Agent", h_flex().gap(6).items_center().child(this.agentIcon(t, p, 14)).child(div().child(program?.name ?? (name || "plain shell")))))
@@ -1318,6 +1332,8 @@ export default class ProjectPresets extends View {
         .when(Boolean(p.group), (el) => el.child(kv("Group", p.group)))
         .when(this.gitInfo, (el) => el.child(kv("Branch", info?.branch ?? "…")).child(kv("Changes", info?.dirty ? div().text_color(t.working).child(dirtyText) : dirtyText)).child(kv("Worktrees", info == null ? "…" : String(info.worktrees))))
         .child(kv("Last opened", ago(this.snap.recent[p.path]))))
+      .when(p.worktree.autoLayout && (!this.snap.launcherInLayout || this.snap.launcher === "off"), (el) => el.child(div().text_size(11).text_color(t.dim)
+        .child(`auto-layout needs the Projects button in the layout (Launcher: ${this.snap.launcherInLayout ? LAUNCHERS.find(([k]) => k === this.snap.launcher)?.[1] : "add to layout"})`)))
       .child(v_flex().gap(6)
         .child(h_flex().items_center().child(div().flex_1().text_size(10.5).font_semibold().text_color(t.dim).child(`LAYOUT${this.layoutPick !== null ? " · PICKED" : ""}`))
           .child(div().px(6).rounded(5).border_1().border_color(t.input).text_size(10.5).text_color(t.foreground).child(LAYOUT_HINT())))
@@ -1539,6 +1555,7 @@ export default class ProjectPresets extends View {
         h_flex().pt(12).gap(8).items_center()
           .child(toggle("pp-repospace", "Open the repo's space first", d.worktree.repoSpace, (v) => (d.worktree.repoSpace = v)))
           .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).child("worktrees then nest under it in the sidebar")),
+        h_flex().pt(10).child(toggle("pp-autolayout", "Auto-layout: set up spaces opened outside the picker", d.worktree.autoLayout, (v) => (d.worktree.autoLayout = v))),
       ],
       git: () => [
         h_flex().pt(10).gap(8)
