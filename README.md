@@ -49,14 +49,14 @@ Enter on a project opens a launch screen: open as a worktree or the checkout, a 
 - `worktree.setup`: commands that run once, when the worktree is new (`npm ci`).
 - `startup.setup`: commands that run on every open, checkout or worktree (`docker compose up -d`).
 
-Commands can use `{main}` (the project checkout), `{folder}` (the folder being set up), `{branch}`, `{repo}`, `{name}` and `{home}`; the same values are in the environment as `PROJECTS_MAIN`, `PROJECTS_FOLDER`, `PROJECTS_BRANCH` and so on. The commands are chained into one shell line (`a && b && c`) that a terminal runs, so the launch screen closes within seconds even when setup takes minutes.
+Commands can use `{main}` (the project checkout), `{folder}` (the folder being set up), `{branch}`, `{repo}`, `{name}` and `{home}`; the same values are in the environment as `PROJECTS_MAIN`, `PROJECTS_FOLDER`, `PROJECTS_BRANCH` and so on. Only those six braces are filled: `${PROJECTS_MAIN}`, `awk '{print}'` and `jq '{x: .y}'` are left as written. Each command runs in its own shell, chained into one line (`sh -ec 'a' && sh -ec 'b'`) that a terminal runs, so a comment, `;`, `&` or `||` in a command stays inside it and a command like `a; b` fails when `a` does. The launch screen closes within seconds even when setup takes minutes; its busy screen lists each command as `will run: <command>`.
 
 `startup.agentTiming` (or the Agent button on the launch screen, ctrl+alt+T) picks where that line runs:
 
 - `after`: in the agent's own pane. The agent takes the pane over when every step has succeeded, with the prompt. If a step fails the pane stays at a shell with the output above it and no agent starts.
 - `with`: the agent starts at once and the prompt goes in; setup runs beside it in a tab named "setup", which disappears when it succeeds and stays at a shell when it fails.
 
-A new worktree is told by the marker file `.projects-setup-done`, written when its setup succeeds and hidden from git through `info/exclude` (shared by the checkout and all its worktrees). Opening the worktree again skips `copy` and `worktree.setup`. A worktree whose setup failed has no marker, so the next open tries again. `startup.quickSetup` runs the commands one by one inside the popup instead (30 s each, popup busy); the marker is written after they succeed.
+A new worktree is told by the marker file `.projects-setup-done`, written when its setup succeeds and hidden from git through `info/exclude` (shared by the checkout and all its worktrees). Opening the worktree again skips `copy` and `worktree.setup`. A worktree whose setup failed has no marker, so the next open tries again. `startup.quickSetup` runs the commands one by one inside the popup instead (30 s each, popup busy, with the same braces and `PROJECTS_*` environment, each shown as `$ <command>`); the marker is written after they succeed.
 
 ## Development
 
