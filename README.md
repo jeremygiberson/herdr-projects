@@ -8,10 +8,13 @@ Started from [project-presets](https://github.com/cgill27/project-presets) by cg
 
 ```bash
 ln -s "$PWD/mods/projects" ~/.config/herdr-app/mods/projects
-ln -s "$PWD/mods/projects-launcher" ~/.config/herdr-app/mods/projects-launcher
 ```
 
 Then merge `keys.json` into `~/.config/herdr-app/keys.json`.
+
+## The clickable Projects button
+
+The picker's **Launcher: add to layout** button writes a copy of the shown layout with three small blocks (beside the sidebar's spaces, the status bar and the tab bar) and switches to it; the button then reads **Launcher: sidebar / status bar / tab bar / off** and each click moves the Projects button to the next place. Each block loads this same `projects` mod with a `slot` prop: that copy draws the button and also runs the auto-layout watcher (it sets up spaces opened outside the picker for auto-layout projects). **Launcher: off** hides every block, and a hidden block's copy may never start, so it turns the watcher off too: keep the button shown somewhere if you rely on auto-layout. A layout made before the launcher moved into this mod (its blocks name `projects-launcher`) is rewritten to load `projects` the next time you click the Launcher button.
 
 ## Projects file
 
@@ -64,5 +67,4 @@ A new worktree is told by the marker file `.projects-setup-done`, written when i
 node --test test/*.test.mjs
 herdr-app check mods/projects
 cp ~/.config/herdr-app/gpui-kit.d.ts ~/.config/herdr-app/herdr.d.ts mods/projects/
-cp ~/.config/herdr-app/gpui-kit.d.ts ~/.config/herdr-app/herdr.d.ts mods/projects-launcher/
 ```

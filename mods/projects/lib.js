@@ -619,13 +619,13 @@ export function exportFileName(now = new Date()) {
   return `projects-config-${now.getFullYear()}-${n(now.getMonth() + 1)}-${n(now.getDate())}-${n(now.getHours())}${n(now.getMinutes())}${n(now.getSeconds())}.json`;
 }
 
-/** The launcher blocks a layout needs (see the projects-launcher mod), added to a copy of `tree`: the sidebar one
+/** The launcher blocks a layout needs (drawn by the projects mod itself, see renderLauncher in main.js), added to a copy of `tree`: the sidebar one
  *  under the Spaces list, the status one beside the status bar, the tab one beside the tab bar. Each is added only where
  *  the layout has the block it goes beside (`spaces`, `status`, `tabs`), and never twice. Returns { tree, added: [slots] }. */
 export function withLauncherBlocks(tree) {
   const copy = JSON.parse(JSON.stringify(tree ?? null));
   const added = [];
-  const block = (slot, px) => ({ id: `projects-launch-${slot}`, type: "block", size: { px }, content: { mod: "projects-launcher", props: { slot } } });
+  const block = (slot, px) => ({ id: `projects-launch-${slot}`, type: "block", size: { px }, content: { mod: "projects", props: { slot } } });
   const has = (n, id) => n?.id === id || (n?.children ?? []).some((c) => has(c, id));
   // Wraps the block `id` in a container of its own kind (the block keeps its content; the container takes its size).
   const wrap = (n, id, type, slot, px, containerId) => {
@@ -647,4 +647,17 @@ export function withLauncherBlocks(tree) {
   if (wrap(copy, "status", "row", "status", 96, "status-row")) added.push("status");
   if (wrap(copy, "tabs", "row", "tabs", 36, "tabs-row")) added.push("tabs");
   return { tree: copy, added };
+}
+
+/** A copy of the layout tree whose launcher blocks name the retired projects-launcher mod rewritten to load the projects
+ *  mod (which now draws the button and runs the watcher), props kept. `changed`: whether any block was rewritten. */
+export function migrateLauncherBlocks(tree) {
+  const copy = JSON.parse(JSON.stringify(tree ?? null));
+  let changed = false;
+  const walk = (n) => {
+    if (n?.content?.mod === "projects-launcher") { n.content.mod = "projects"; changed = true; }
+    (n?.children ?? []).forEach(walk);
+  };
+  walk(copy);
+  return { tree: copy, changed };
 }

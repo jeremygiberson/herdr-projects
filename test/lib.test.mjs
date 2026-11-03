@@ -430,6 +430,22 @@ test("withLauncherBlocks puts the launcher beside spaces, status and tabs, only 
   assert.deepEqual(section.children.map((c) => c.id), ["spaces", "projects-launch-sidebar"]);
   assert.deepEqual(out.tree.children[1].size, { px: 42 });
   assert.deepEqual(withLauncherBlocks(out.tree).added, [], "already there: nothing added");
+  assert.deepEqual(section.children[1].content, { mod: "projects", props: { slot: "sidebar" } }, "the block draws the projects mod itself, told its slot");
+});
+
+test("migrateLauncherBlocks points the old projects-launcher blocks at the projects mod, keeping their props", async () => {
+  const { migrateLauncherBlocks } = await import("../mods/projects/lib.js");
+  const old = (slot) => ({ id: `projects-launch-${slot}`, type: "block", size: { px: 36 }, content: { mod: "projects-launcher", props: { slot } } });
+  const tree = { id: "root", children: [{ id: "spaces-section", children: [{ id: "spaces" }, old("sidebar")] }, { id: "tabs-row", children: [{ id: "tabs" }, old("tabs")] }] };
+  const out = migrateLauncherBlocks(tree);
+  assert.equal(out.changed, true);
+  assert.deepEqual(out.tree.children[0].children[1].content, { mod: "projects", props: { slot: "sidebar" } });
+  assert.deepEqual(out.tree.children[1].children[1].content, { mod: "projects", props: { slot: "tabs" } });
+  assert.equal(tree.children[0].children[1].content.mod, "projects-launcher", "the original is not changed");
+  const again = migrateLauncherBlocks(out.tree);
+  assert.equal(again.changed, false, "nothing left to rewrite");
+  assert.deepEqual(again.tree, out.tree);
+  assert.equal(migrateLauncherBlocks(null).changed, false);
 });
 
 test("normalize upgrades a legacy startup: agent, layout and string tabs become tabs", () => {

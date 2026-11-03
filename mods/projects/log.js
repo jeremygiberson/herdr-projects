@@ -9,9 +9,9 @@ const dir = () => `${appHome()}/data`;
 let debug = false;
 let queue = Promise.resolve();
 
-export async function initLog() {
+export async function initLog(what = "picker opened") {
   try { debug = await fs.exists(`${dir()}/projects.debug`); } catch { debug = false; }
-  log("debug", "picker opened", { debug });
+  log("debug", what, { debug });
 }
 
 export function log(level, message, data) {

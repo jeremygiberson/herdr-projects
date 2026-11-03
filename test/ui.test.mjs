@@ -1543,18 +1543,75 @@ test("with no launcher blocks in the layout, the Launcher button writes a copy w
   state.runs.length = 0;
   v.cycleLauncher();
   await cx.settle();
-  assert.match(v.error, /launcher mod isn't installed/, "without the mod's folder the picker says what to copy and writes nothing");
-  assert.ok(!existsSync(`${state.appHome}/layouts/main-launcher.json`));
-  assert.deepEqual(state.runs, []);
-  mkdirSync(`${state.appHome}/mods/projects-launcher`, { recursive: true });
-  writeFileSync(`${state.appHome}/mods/projects-launcher/main.js`, "");
-  v.cycleLauncher();
-  await cx.settle();
+  assert.equal(v.error, null, "no separate launcher mod to check for");
   const file = `${state.appHome}/layouts/main-launcher.json`;
   assert.ok(existsSync(file), "the copy is written as a file, with no clone to wait for");
   const text = readFileSync(file, "utf8");
   assert.ok(["projects-launch-sidebar", "projects-launch-status", "projects-launch-tabs"].every((id) => text.includes(id)));
+  assert.ok(!text.includes("projects-launcher"), "the blocks draw the projects mod");
   assert.deepEqual(state.runs.map((r) => [r.command, r.args.name]), [["layout.switch", "main-launcher"]], "no layout.clone and no layout.set");
+});
+
+test("the Launcher button rewrites a layout whose blocks still name the retired projects-launcher mod, then cycles", async () => {
+  const { v, cx } = await open([proj("alpha", "/r/a")]);
+  setShared("layout", "main-launcher");
+  state.layout = { id: "root", children: [{ id: "spaces-section", children: [{ id: "spaces" }, { id: "projects-launch-sidebar", type: "block", content: { mod: "projects-launcher", props: { slot: "sidebar" } } }] }] };
+  const file = `${state.appHome}/layouts/main-launcher.json`;
+  mkdirSync(`${state.appHome}/layouts`, { recursive: true });
+  writeFileSync(file, JSON.stringify(state.layout, null, 2) + "\n");
+  v.refreshSnap();
+  v.cycleLauncher();
+  await cx.settle();
+  assert.equal(v.snap.launcher, "status", "the cycle still happens");
+  const saved = JSON.parse(readFileSync(file, "utf8"));
+  assert.deepEqual(saved.children[0].children[1].content, { mod: "projects", props: { slot: "sidebar" } });
+  assert.equal(v.error, null);
+});
+
+/** The copy of the mod a launcher block loads: props() carries the block's slot. */
+function openLauncher(slot = "sidebar") {
+  reset();
+  state.props = { slot };
+  const cx = { timers: [], every: [], timer: { after: (ms, fn) => cx.timers.push({ ms, fn }), every: (ms, fn) => cx.every.push({ ms, fn }) }, spawn: (fn) => fn(cx), focus_handle: () => ({}), notify() {}, stop_propagation() {} };
+  const v = new Picker();
+  v.init({}, cx);
+  return { v, cx };
+}
+
+test("loaded by a launcher block, the mod draws the Projects button and runs the watcher, with no picker", () => {
+  const { v, cx } = openLauncher("sidebar");
+  assert.equal(v.role, "launcher");
+  assert.ok(v.watcher, "the watcher lives in this copy");
+  assert.ok(cx.every.some((e) => e.ms === 2000), "the watcher's tick is registered");
+  assert.ok(!cx.every.some((e) => e.ms === 3000), "no picker snapshot timer");
+  assert.equal(v.search, undefined, "no search box");
+  const el = v.render();
+  assert.ok(textOf(el).includes("Projects"));
+  const button = findAll(el, (e) => e.op?.("id")?.[0] === "pp-launch")[0];
+  button.op("on_click")[0]();
+  assert.deepEqual(state.runs.map((r) => [r.command, r.args.name]), [["mod.open", "projects"]], "a click opens the picker");
+});
+
+test("a launcher copy whose slot is not the chosen one hides its own block, once", () => {
+  const { v } = openLauncher("tabs");
+  setShared("projects.launcher", "status");
+  v.render(); v.render();
+  assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["layout.hide", "projects-launch-tabs"]]);
+});
+
+test("opened as a popup (no slot), the mod is the picker and runs no watcher", async () => {
+  const { v } = await open([proj("alpha", "/r/a")]);
+  assert.equal(v.role, "picker");
+  assert.equal(v.watcher, undefined);
+  assert.ok(v.search);
+});
+
+test("a demo file can start the launcher setup", async () => {
+  const { v } = await open([proj("alpha", "/r/a")]);
+  let called = 0;
+  v.setupLauncher = () => { called++; };
+  v.applyDemo({ view: "launcher-setup" });
+  assert.equal(called, 1);
 });
 
 test("a demo file can open the editor on a given tab and pane", async () => {

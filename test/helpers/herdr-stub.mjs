@@ -41,7 +41,7 @@ export const state = {
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], closed: 0, platform: "linux", picked: null });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], closed: 0, platform: "linux", picked: null, props: undefined });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -160,7 +160,7 @@ export const knownAgents = async () => state.known;
 export const window = () => { count("window"); return { platform: state.platform ?? "linux" }; };
 export const theme = () => { count("theme"); return themeProxy(); };
 const themeProxy = () => new Proxy({}, { get: (_t, k) => `#${String(k)}` });
-export const props = () => ({ overlay: "ov1" });
+export const props = () => state.props ?? { overlay: "ov1" }; // a test sets state.props to draw the launcher copy ({ slot })
 export const closeOverlay = () => { state.closed++; };
 export const pickFolder = async () => state.picked ?? null;
 export const shared = (k) => { count("shared"); return store[k]; };

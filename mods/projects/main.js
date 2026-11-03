@@ -7,12 +7,13 @@ import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
 import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec } from "herdr";
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
-import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
+import { inspect, repoKey, branchOf, realPath, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
 import { buildWorkspace } from "./workspace.js";
 import { prepareSetup } from "./setup.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, shq } from "./lib.js";
+import { Watcher } from "./watch.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, migrateLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, shq } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -86,6 +87,16 @@ const boxNote = (list, f) => list.find(([k]) => k === f);
 
 export default class ProjectPresets extends View {
   init(_props, cx) {
+    // A launcher block loads this mod with its slot: that copy draws the Projects button and runs the watcher, nothing else.
+    const slot = props()?.slot;
+    this.role = slot ? "launcher" : "picker";
+    if (slot) {
+      this.slot = slot;
+      initLog("launcher started");
+      this.watcher = new Watcher({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log });
+      this.watcher.start(cx);
+      return;
+    }
     this.cx = cx;
     this.scroll = VirtualListScrollHandle.new();
     this.wtScroll = VirtualListScrollHandle.new();
@@ -232,7 +243,8 @@ export default class ProjectPresets extends View {
     } else if (d.view === "worktrees") {
       this.afterWt = () => { if (d.tick) this.selectMerged(); if (d.confirm) this.wtConfirm = true; };
       this.openWorktrees();
-    } else if (d.view === "busy") {
+    } else if (d.view === "launcher-setup") this.setupLauncher(); // for checking the launcher blocks in the app
+    else if (d.view === "busy") {
       this.target = project;
       this.mode = "busy";
       this.notes = d.notes ?? [];
@@ -320,9 +332,6 @@ export default class ProjectPresets extends View {
     log("info", "adding the launcher blocks", { from, as, added });
     if (!added.length) return this.fail("launcher", new Error("this layout has no spaces, status or tabs block to put the button beside"));
     return this.guard("launcher", async () => {
-      // The blocks draw with the projects-launcher mod; without its folder they would be empty and herdr would log errors.
-      const modDir = `${appHome()}/mods/projects-launcher`;
-      if ((await readTextFile(`${modDir}/main.js`)) == null) throw new Error(`the launcher mod isn't installed. Copy mods/projects-launcher/ from the repo to ${shortHome(modDir, homeOf())}, then click this again`);
       await writeTextFile(`${appHome()}/layouts/${as}.json`, JSON.stringify(tree, null, 2) + "\n", null);
       run("layout.switch", { name: as });
       this.snap = { ...this.snap, launcherInLayout: true };
@@ -330,10 +339,11 @@ export default class ProjectPresets extends View {
     })();
   }
 
-  /** Moves the clickable open button (see the projects-launcher mod) to the next place: sidebar, status bar,
-   *  tab bar, then off. The key combo is not affected. */
+  /** Moves the clickable open button (see renderLauncher) to the next place: sidebar, status bar, tab bar, then off.
+   *  The key combo is not affected; "off" also stops the watcher, which lives in the same copy. */
   cycleLauncher() {
     if (launcherBlocks().length === 0) return this.setupLauncher();
+    this.migrateLauncher();
     const now = shared(LAUNCHER) ?? "sidebar";
     const next = LAUNCHERS[(LAUNCHERS.findIndex(([k]) => k === now) + 1) % LAUNCHERS.length][0];
     setShared(LAUNCHER, next);
@@ -342,6 +352,23 @@ export default class ProjectPresets extends View {
     // nothing to show or hide, and asking would fail.
     const have = launcherBlocks();
     for (const [k] of LAUNCHERS) if (k !== "off" && have.includes(`projects-launch-${k}`)) run(k === next ? "layout.show" : "layout.hide", { id: `projects-launch-${k}` });
+  }
+
+  /** A layout written before the launcher moved into this mod has blocks naming projects-launcher: rewrite its file to
+   *  name projects (best effort; herdr picks the file up on its own). */
+  migrateLauncher() {
+    const { tree, changed } = migrateLauncherBlocks(layout());
+    if (!changed) return;
+    const name = shared("layout") ?? "main";
+    const path = `${appHome()}/layouts/${name}.json`;
+    this.cx.spawn(async () => {
+      try {
+        const now = await readTextFile(path);
+        if (now == null) return log("info", "launcher blocks name projects-launcher, but the layout has no file to rewrite", { name });
+        await writeTextFile(path, JSON.stringify(tree, null, 2) + "\n", now);
+        log("info", "rewrote the launcher blocks to load the projects mod", { name });
+      } catch (e) { logError("migrate launcher", e); }
+    });
   }
 
   /** ctrl+alt+L: the next layout for `p`'s launch (none, then each layout). */
@@ -1117,6 +1144,7 @@ export default class ProjectPresets extends View {
   // ---- render -----------------------------------------------------------
 
   render() {
+    if (this.role === "launcher") return this.renderLauncher(theme());
     const cx = this.cx;
     const t = theme();
     this.frame = null;
@@ -1130,6 +1158,36 @@ export default class ProjectPresets extends View {
     return v_flex().id("projects").track_focus(this.handle).w_full().min_h(0).p(18).gap(10).bg(t.popover).text_size(13)
       .on_key_down(this.guard("key", (e, cx) => { log("debug", "key", { key: e.key, mods: e.modifiers, mode: this.mode }); this.keys(e, cx); }))
       .child(body);
+  }
+
+  /** The launcher copy's whole view: the clickable "Projects" button in its block (sidebar footer, status bar or tab
+   *  bar). Only the slot chosen in the picker ("Launcher: …", shared(LAUNCHER)) shows; the others hide their own block, so
+   *  no empty space is left behind. */
+  renderLauncher(t) {
+    const slot = this.slot ?? "sidebar";
+    const chosen = shared(LAUNCHER) ?? "sidebar";
+    const open = () => run("mod.open", { name: "projects" });
+    if (chosen !== slot) {
+      // Not this one's turn: close the block (the picker opens it again when it is chosen).
+      if (!this.hid) { this.hid = true; run("layout.hide", { id: `projects-launch-${slot}` }); }
+      return div();
+    }
+    this.hid = false;
+    const icon = (n) => svg("mods/workspace-chrome/folder.svg").size(n).flex_none();
+    if (slot === "sidebar") {
+      return h_flex().size_full().bg(t.chrome).px(8).items_center().child(
+        h_flex().id("pp-launch").h(28).w_full().px(8).gap(9).items_center().rounded(8).text_size(13).text_color(t.muted).cursor_pointer()
+          .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(open).child(icon(14)).child("Projects"));
+    }
+    if (slot === "status") {
+      return h_flex().size_full().bg(t.chrome).border_t(1).border_color(t.border).px(8).items_center().child(
+        h_flex().id("pp-launch").h(20).px(8).gap(6).items_center().rounded(5).text_size(11.8).text_color(t.muted).cursor_pointer()
+          .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(open).child(icon(13)).child("Projects"));
+    }
+    return h_flex().size_full().bg(t.chrome).border_b(1).border_color(t.border).pr(6).items_center().child(
+      div().id("pp-launch").size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).cursor_pointer()
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(open).child(icon(15)));
   }
 
   /** A scrolling list of 48px rows: wheel and scrollbar work, and `reveal` keeps the highlight in view. */
