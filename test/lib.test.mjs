@@ -162,7 +162,7 @@ test("layoutPlan lists the splits in order and defaults each to the previous pan
 
 test("layoutPlan names the problem in a bad layout", () => {
   const bad = (panes) => () => layoutPlan({ name: "x", panes });
-  assert.throws(bad([{ type: "agent" }, { type: "shell" }]), /needs direction/);
+  assert.deepEqual(layoutPlan({ name: "x", panes: [{ type: "agent" }, { type: "shell" }] }).map((q) => [q.direction, q.from]), [["down", "agent"]], "a missing direction defaults to down");
   assert.throws(bad([{ type: "agent" }, { type: "shell", direction: "left" }]), /needs direction/);
   assert.throws(bad([{ type: "agent" }, { type: "tmux", direction: "down" }]), /unknown type/);
   assert.throws(bad([{ type: "agent" }, { type: "command", direction: "down" }]), /no command/);
@@ -261,7 +261,7 @@ test("layoutRects divides the pane each split comes from", () => {
   assert.deepEqual(three.map((r) => [r.name, r.x, r.y, r.w, r.h]), [["agent", 0, 0, 0.5, 1], ["files", 0.5, 0, 0.5, 0.5], ["term", 0.5, 0.5, 0.5, 0.5]]);
   const from = layoutRects({ name: "f", panes: [{ type: "agent" }, { name: "a", direction: "right" }, { name: "b", direction: "down", from: "agent" }] });
   assert.deepEqual(from.map((r) => [r.name, r.x, r.y, r.w, r.h]), [["agent", 0, 0, 0.5, 0.5], ["a", 0.5, 0, 0.5, 1], ["b", 0, 0.5, 0.5, 0.5]]);
-  assert.deepEqual(layoutRects({ name: "bad", panes: [{ type: "agent" }, { type: "shell" }] }), [{ name: "agent", x: 0, y: 0, w: 1, h: 1 }]);
+  assert.deepEqual(layoutRects({ name: "bad", panes: [{ type: "agent" }, { type: "shell", direction: "left" }] }), [{ name: "agent", x: 0, y: 0, w: 1, h: 1 }]);
 });
 
 test("enterAction describes each worktree mode", () => {

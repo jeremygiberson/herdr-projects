@@ -269,15 +269,8 @@ export function allLayouts(user) {
 }
 
 /** The splits that build a layout, in order (pane objects: name, type, command, direction, from, ...). The first
- *  pane is the agent's and needs no split. Throws with the reason when a pane can't be placed. A layout is written
- *  by hand, so unlike a tab it must say each split's direction. */
-export function layoutPlan(layout) {
-  const plan = tabPlan([{ name: layout?.name ?? "layout", panes: layout?.panes ?? [] }])[0].panes.slice(1);
-  (layout?.panes ?? []).slice(1).forEach((x, i) => {
-    if (!["right", "down"].includes(x?.direction)) throw new Error(`Tab "${layout.name}": pane "${plan[i].name}" needs direction "right" or "down"`);
-  });
-  return plan;
-}
+ *  pane is the agent's and needs no split. Throws with the reason when a pane can't be placed. */
+export const layoutPlan = (layout) => tabPlan([{ name: layout?.name ?? "layout", panes: layout?.panes ?? [] }])[0].panes.slice(1);
 
 /** The layout after `current` when cycling through none ("") and then every layout; an unknown name goes to none. */
 export function nextLayout(names, current) {
