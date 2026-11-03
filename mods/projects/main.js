@@ -11,7 +11,7 @@ import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceNam
 import { buildWorkspace } from "./workspace.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, shortHome, splitList, joinList, basename, allLayouts, nextLayout, layoutPlan, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent } from "./lib.js";
+import { fuzzy, blankProject, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -88,7 +88,7 @@ export default class ProjectPresets extends View {
     this.detail = shared(DETAIL) !== false; // the detail card beside the list (ctrl+alt+I turns it off)
     this.gitInfo = true;
     this.info = {}; // folder → { branch, dirty, worktrees } (null: not readable), filled in after the list shows
-    this.layoutPick = null; // null: each project's own layout; "": none; else a layout name (set only when it differs from the project's own)
+    this.layoutPick = null; // null: each project's own tabs; else a layout name (a pick of "" is the same as null)
     this.raw = null;
     this.mode = "list"; // list | edit | name | busy
     this.at = 0;
@@ -283,8 +283,8 @@ export default class ProjectPresets extends View {
 
   selected() { return this.rows()[this.at]; }
 
-  /** The layout name a launch of `p` uses: the picked one, else the project's own. */
-  layoutNameFor(p) { return this.layoutPick ?? p.startup.layout; }
+  /** The layout name a launch of `p` uses: the picked one, else "" (the project's own tabs). */
+  layoutNameFor(p) { return this.layoutPick ?? ""; }
 
   /** ctrl+alt+I: shows or hides the detail card; the choice is kept for next time. */
   toggleDetail() {
@@ -331,7 +331,7 @@ export default class ProjectPresets extends View {
   /** ctrl+alt+L: the next layout for `p`'s launch (none, then each layout). */
   cycleLayout(p) {
     const next = nextLayout(this.layouts.map((l) => l.name), this.layoutNameFor(p));
-    this.layoutPick = next === (p.startup.layout ?? "") ? null : next;
+    this.layoutPick = next === "" ? null : next;
     // The selector stands out for a second so the change is easy to see.
     const flash = (this.layoutFlash = (this.layoutFlash ?? 0) + 1);
     this.layoutLit = true;
@@ -361,7 +361,7 @@ export default class ProjectPresets extends View {
       .child(hintLine)
       .child(h_flex().gap(6).items_center().flex_wrap().text_size(FOOTER_SIZE)
         .child(div().text_color(t.dim).child("Layout"))
-        .child(choice("", "Agent only"))
+        .child(choice("", "Project's tabs"))
         .children(this.layouts.map((l) => choice(l.name, l.label ?? l.name)))
         .child(div().flex_1())
         .child(div().px(6).rounded(5).border_1().border_color(t.input).bg(t.raised).text_size(10.5).text_color(t.foreground).child(LAYOUT_HINT())));
@@ -379,7 +379,7 @@ export default class ProjectPresets extends View {
   /** The mini icon for what a project starts: its agent (claude, hermes, pi…), the shell icon for a plain
    *  shell, and the generic agent icon for a command herdr has no entry for. */
   agentIcon(t, p, size = 16) {
-    const name = commandName(p.startup.agent);
+    const name = commandName(firstAgent(p.startup.tabs)?.pane.agent);
     if (!name) return this.shellIcon(t, size);
     return this.programIcon(t, this.allAgents.find((a) => a.key === name || commandName((a.run ?? []).join(" ")) === name), size);
   }
@@ -440,10 +440,10 @@ export default class ProjectPresets extends View {
     const log = (m) => { this.notes = [...this.notes, m]; this.cx?.notify(); };
     this.cx?.spawn(async (cx) => {
       try {
-        const layoutName = this.layoutNameFor(p);
-        const layout = layoutName ? this.layouts.find((l) => l.name === layoutName) : null;
-        if (layoutName && !layout) throw new Error(`No layout called "${layoutName}". Layouts: ${this.layouts.map((l) => l.name).join(", ") || "none"}`);
-        if (layout) layoutPlan(layout); // a broken layout is reported before anything is created
+        const pick = this.layoutNameFor(p);
+        if (pick && !this.layouts.some((l) => l.name === pick)) throw new Error(`No layout called "${pick}". Layouts: ${this.layouts.map((l) => l.name).join(", ") || "none"}`);
+        const tabs = tabsForLaunch(p, this.layouts, pick);
+        tabPlan(tabs); // a broken layout is reported before anything is created
         let folder = projectFolder(p);
         let name = p.name;
         const existing = findSpace(p);
@@ -461,9 +461,10 @@ export default class ProjectPresets extends View {
           await runSetup(p, folder, log);
         }
         setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
-        if (p.startup.agent.trim() && p.startup.prompt && p.startup.promptMode === "send") log("Waiting for the agent to be ready for its prompt…");
+        const first = firstAgent(p.startup.tabs)?.pane;
+        if (first?.prompt && first.promptMode === "send") log("Waiting for the agent to be ready for its prompt…");
         // Stay open until the prompt is sent: closing the popup cancels this task.
-        await buildWorkspace({ project: p, folder, name, tabs: tabsForLaunch(p, this.layouts, this.layoutNameFor(p)), prompt: firstAgent(p.startup.tabs)?.pane.prompt ?? "", log });
+        await buildWorkspace({ project: p, folder, name, tabs, prompt: first?.prompt ?? "", log });
         this.dismiss();
       } catch (e) {
         logError("open project", e);
@@ -920,7 +921,7 @@ export default class ProjectPresets extends View {
   /** The card for the template row: what it is, the settings a project made from it starts with, and its buttons. */
   renderTemplateCard(t, card, r, cx) {
     const p = r.p;
-    const name = commandName(p.startup.agent);
+    const name = commandName(firstAgent(p.startup.tabs)?.pane.agent);
     const program = name && this.allAgents.find((a) => a.key === name || commandName((a.run ?? []).join(" ")) === name);
     const kv = (k, v) => h_flex().gap(10).text_size(12).text_color(t.foreground).child(div().w(84).text_color(t.dim).child(k)).child(v);
     return card
@@ -931,7 +932,7 @@ export default class ProjectPresets extends View {
       .child(div().text_size(12).text_color(t.dim).child(`Not a real project: it has no folder. Edit it (${key("e")}) to set the defaults you want, then use it to make projects. Add project starts from it once you have saved it.`))
       .child(v_flex().gap(3)
         .child(kv("Agent", program?.name ?? (name || "plain shell")))
-        .child(kv("Layout", p.startup.layout || "agent only"))
+        .child(kv("Tabs", tabLabels(p.startup.tabs).join(" · ")))
         .child(kv("Worktrees", enterAction(p.worktree.mode)[0]))
         .when(Boolean(p.group), (el) => el.child(kv("Group", p.group))))
       .child(h_flex().gap(8).items_center().flex_wrap()
@@ -945,13 +946,13 @@ export default class ProjectPresets extends View {
     if (p.template) return this.renderTemplateCard(t, card, r, cx);
     const folder = projectFolder(p);
     const info = this.info[folder];
-    const name = commandName(p.startup.agent);
+    const name = commandName(firstAgent(p.startup.tabs)?.pane.agent);
     const program = name && this.allAgents.find((a) => a.key === name || commandName((a.run ?? []).join(" ")) === name);
     const kv = (k, v) => h_flex().gap(10).items_start().text_size(12)
       .child(div().w(84).flex_none().text_color(t.dim).child(k))
       .child(div().flex_1().min_w(0).text_color(t.foreground).child(v));
     const current = this.layoutNameFor(p);
-    const choices = [{ name: "", label: "Agent only", panes: [{ type: "agent" }] }, ...this.layouts];
+    const choices = [{ name: "", label: "Project's tabs", panes: p.startup.tabs[0].panes }, ...this.layouts];
     const [what, openLabel] = enterAction(p.worktree.mode);
     const shown = choices.find((c) => c.name === current);
     const dirtyText = info == null ? "…" : info.dirty ? `${info.dirty} file${info.dirty > 1 ? "s" : ""} modified` : "clean";
@@ -962,7 +963,9 @@ export default class ProjectPresets extends View {
         .when(Boolean(r.space), (el) => el.child(this.tag(t, r.space.status === "working" ? "agent working" : "open", r.space.status === "working" ? t.working : t.done)))
         .when(p.pinned, (el) => el.child(this.tag(t, "pinned", t.dim, t.input))))
       .child(v_flex().gap(4)
+        .when(Boolean(p.description), (el) => el.child(div().text_size(12).text_color(t.dim).child(p.description)))
         .child(kv("Agent", h_flex().gap(6).items_center().child(this.agentIcon(t, p, 14)).child(div().child(program?.name ?? (name || "plain shell")))))
+        .child(kv("Tabs", tabLabels(p.startup.tabs).join(" · ")))
         .when(Boolean(p.group), (el) => el.child(kv("Group", p.group)))
         .when(this.gitInfo, (el) => el.child(kv("Branch", info?.branch ?? "…")).child(kv("Changes", info?.dirty ? div().text_color(t.working).child(dirtyText) : dirtyText)).child(kv("Worktrees", info == null ? "…" : String(info.worktrees))))
         .child(kv("Last opened", ago(this.snap.recent[p.path]))))
@@ -974,12 +977,12 @@ export default class ProjectPresets extends View {
           const lit = on && this.layoutLit;
           return v_flex().id(`pp-lay-${i}`).gap(4).p(6).rounded(9).border_1().cursor_pointer()
             .border_color(on ? (lit ? t.accent : t.solid) : t.input).bg(on ? t.selected : t.background)
-            .on_click(this.guard("layout click", () => { this.layoutPick = c.name === (p.startup.layout ?? "") ? null : c.name; cx.notify(); }))
+            .on_click(this.guard("layout click", () => { this.layoutPick = c.name === "" ? null : c.name; cx.notify(); }))
             .child(this.layoutThumb(t, c, on))
             .child(div().text_size(10.5).max_w(72).text_color(on ? t.foreground : t.dim).when(on, (el) => (lit ? el.font_bold() : el.font_semibold())).child(c.label ?? c.name))
-            .when(c.name === (p.startup.layout ?? ""), (el) => el.child(div().text_size(9.5).text_color(t.dim).child("project default")));
+            .when(c.name === "", (el) => el.child(div().text_size(9.5).text_color(t.dim).child("project default")));
         }))))
-      .child(div().text_size(12).text_color(t.dim).child(`Enter ${what}${shown && shown.name ? ` and opens ${(shown.label ?? shown.name).toLowerCase()}` : " and opens the agent alone"}.`))
+      .child(div().text_size(12).text_color(t.dim).child(`Enter ${what}${shown && shown.name ? ` and opens ${(shown.label ?? shown.name).toLowerCase()}` : " and opens the project's tabs"}.`))
       .child(h_flex().gap(8).items_center()
         .child(this.button(t, "pp-open", openLabel, true, () => { this.activate(false); cx.notify(); }))
         .child(this.button(t, "pp-checkout", "Checkout", false, () => { this.activate(true); cx.notify(); })));

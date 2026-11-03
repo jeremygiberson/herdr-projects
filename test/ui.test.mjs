@@ -3,7 +3,7 @@
 import "./helpers/setup.mjs";
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, readFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { makeRepo, scratch, sh } from "./helpers/repo.mjs";
 
@@ -44,6 +44,8 @@ async function open(projects, layouts, opts = { detail: true }) {
   await cx.settle();
   return { v, cx };
 }
+/** A startup with one tab whose pane is this agent. */
+const AG = (agent, extra = {}) => ({ tabs: [{ name: "agent", panes: [{ type: "agent", agent, ...extra }] }] });
 const proj = (name, path, over = {}) => normalize({ name, path, git: { fetch: false }, ...over });
 // What a draw reads is a snapshot of herdr's data, refreshed on a timer: a test that changes that data refreshes it first.
 const rendered = (v) => { v.refreshSnap(); return v.render(); };
@@ -76,10 +78,10 @@ test("an empty list says how to start", async () => {
 
 test("each row has its agent's icon, a shell icon for a plain shell, and the generic icon for an unknown command", async () => {
   const { v } = await open([
-    proj("a-claude", "/r/a", { startup: { agent: "claude --model opus" } }),
-    proj("b-codex", "/r/b", { startup: { agent: "codex" } }),
+    proj("a-claude", "/r/a", { startup: AG("claude --model opus") }),
+    proj("b-codex", "/r/b", { startup: AG("codex") }),
     proj("c-shell", "/r/c"),
-    proj("d-weird", "/r/d", { startup: { agent: "mytool" } }),
+    proj("d-weird", "/r/d", { startup: AG("mytool") }),
   ]);
   const icons = findAll(rendered(v), (e) => e.tag === "svg" || e.tag === "image").map((e) => `${e.tag}:${e.arg}`);
   assert.ok(icons.includes("image:icons/claude.svg"));
@@ -120,16 +122,16 @@ test("the footer lists the keys", async () => {
 
 const LAYOUTS = [{ name: "coding", label: "Agent, files and a terminal", panes: [{ type: "agent" }, { name: "files", command: "yazi .", direction: "right" }] }];
 
-test("the card shows every layout as a picture, with the project's own lit", async () => {
-  const { v } = await open([proj("a", "/r/a", { startup: { layout: "coding" } })], LAYOUTS);
+test("the card shows every layout as a picture, with the project's own tabs first", async () => {
+  const { v } = await open([proj("a", "/r/a")], LAYOUTS);
   const c = chips(v);
-  assert.deepEqual(Object.keys(c), ["Agent only", "Agent + terminal below", "Agent + terminal right", "Agent, files and a terminal"]);
-  assert.deepEqual(Object.entries(c).filter(([, e]) => lit(e)).map(([k]) => k), ["Agent, files and a terminal"]);
+  assert.deepEqual(Object.keys(c), ["Project's tabs", "Agent + terminal below", "Agent + terminal right", "Agent, files and a terminal"]);
+  assert.deepEqual(Object.entries(c).filter(([, e]) => lit(e)).map(([k]) => k), ["Project's tabs"]);
 });
 
-test("with no layout set, 'Agent only' is lit", async () => {
+test("with nothing picked, the project's own tabs are lit", async () => {
   const { v } = await open([proj("a", "/r/a")], LAYOUTS);
-  assert.deepEqual(Object.entries(chips(v)).filter(([, e]) => lit(e)).map(([k]) => k), ["Agent only"]);
+  assert.deepEqual(Object.entries(chips(v)).filter(([, e]) => lit(e)).map(([k]) => k), ["Project's tabs"]);
 });
 
 test("ctrl+alt+L steps through the layouts and wraps; a bare alt+L or ctrl+L does nothing", async () => {
@@ -138,20 +140,20 @@ test("ctrl+alt+L steps through the layouts and wraps; a bare alt+L or ctrl+L doe
   press(v, cx, "l", { alt: true });
   press(v, cx, "l", { control: true });
   press(v, cx, "l", { platform: true });
-  assert.equal(now(), "Agent only");
+  assert.equal(now(), "Project's tabs");
   const seen = [];
   for (let i = 0; i < 5; i++) { press(v, cx, "l", CTRL_ALT); seen.push(now()); }
-  assert.deepEqual(seen, ["Agent + terminal below", "Agent + terminal right", "Agent, files and a terminal", "Agent only", "Agent + terminal below"]);
+  assert.deepEqual(seen, ["Agent + terminal below", "Agent + terminal right", "Agent, files and a terminal", "Project's tabs", "Agent + terminal below"]);
   press(v, cx, "l", { platform: true, alt: true });
   assert.equal(now(), "Agent + terminal right", "cmd+alt+L works too");
 });
 
-test("a pick counts only while it differs from the project's own layout", async () => {
-  const { v, cx } = await open([proj("a", "/r/a", { startup: { layout: "coding" } })], LAYOUTS);
+test("a pick counts only while it differs from the project's own tabs", async () => {
+  const { v, cx } = await open([proj("a", "/r/a")], LAYOUTS);
   press(v, cx, "l", CTRL_ALT);
-  assert.equal(v.layoutPick, "", "wrapped to none: differs from coding");
+  assert.equal(v.layoutPick, "agent-terminal", "the first step differs from the project's tabs");
   for (let i = 0; i < 3; i++) press(v, cx, "l", CTRL_ALT);
-  assert.equal(v.layoutPick, null, "back at the project's own layout: not a pick");
+  assert.equal(v.layoutPick, null, "back at the project's own tabs: not a pick");
 });
 
 test("the lit layout picture gets an accent ring for a second after a change", async () => {
@@ -174,7 +176,7 @@ test("the layout key also works at the branch-name step", async () => {
   enter(v);
   assert.equal(v.mode, "name");
   press(v, cx, "l", CTRL_ALT);
-  assert.equal(v.layoutPick, "agent-terminal", "the first step from 'Agent only'");
+  assert.equal(v.layoutPick, "agent-terminal", "the first step from the project's tabs");
   for (let i = 0; i < 3; i++) press(v, cx, "l", CTRL_ALT);
   assert.equal(v.layoutPick, null, "all the way round: back at the project's own, so not a pick");
   const t = texts(v);
@@ -203,22 +205,23 @@ test("Enter on a 'never' project opens its checkout in a space and closes", asyn
   assert.deepEqual(state.splits, []);
 });
 
-test("a project's layout is built when it opens", async () => {
+test("a project's own split panes are built when it opens", async () => {
   const dir = makeRepo();
-  await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: { layout: "agent-terminal" } })]);
+  await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: { tabs: [{ name: "agent", panes: [{ type: "agent" }, { type: "shell", direction: "down" }] }] } })]);
   assert.equal(state.splits.length, 1);
   assert.equal(state.splits[0].direction, "down");
   assert.equal(state.splits[0].pane, "pane-of-sp1");
   assert.equal(state.closed, 1);
 });
 
-test("a layout picked at launch wins over the project's own, and 'Agent only' means no splits", async () => {
+test("a layout picked at launch wins over the project's own, and the project's own means its tabs", async () => {
   const dir = makeRepo();
-  await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: { layout: "agent-terminal" } })], LAYOUTS, (v, cx) => {
-    for (let i = 0; i < 3; i++) press(v, cx, "l", CTRL_ALT); // agent-terminal → side → coding → none
-    assert.equal(v.layoutPick, "");
+  await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: { tabs: [{ name: "agent", panes: [{ type: "agent" }, { type: "shell", direction: "down" }] }] } })], LAYOUTS, (v, cx) => {
+    for (let i = 0; i < 4; i++) press(v, cx, "l", CTRL_ALT); // below → side → coding → the project's tabs
+    assert.equal(v.layoutPick, null);
   });
-  assert.deepEqual(state.splits, []);
+  assert.equal(state.splits.length, 1);
+  assert.equal(state.splits[0].direction, "down");
   reset();
   await launchFirst([proj("demo", dir, { worktree: { mode: "never" } })], LAYOUTS, (v, cx) => {
     for (let i = 0; i < 3; i++) press(v, cx, "l", CTRL_ALT); // → coding
@@ -230,7 +233,7 @@ test("a layout picked at launch wins over the project's own, and 'Agent only' me
 
 test("an unknown layout name stops before anything is created and says which layouts exist", async () => {
   const dir = makeRepo();
-  const { v } = await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: { layout: "nope" } })], LAYOUTS);
+  const { v } = await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: AG("") })], LAYOUTS, (v) => { v.layoutPick = "nope"; });
   assert.match(v.error, /No layout called "nope".*agent-terminal.*coding/);
   assert.equal(v.mode, "busy");
   assert.deepEqual(spaceNew(), []);
@@ -239,8 +242,8 @@ test("an unknown layout name stops before anything is created and says which lay
 
 test("a malformed layout is reported before anything is created", async () => {
   const dir = makeRepo();
-  const bad = [{ name: "bad", panes: [{ type: "agent" }, { type: "shell" }] }];
-  const { v } = await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: { layout: "bad" } })], bad);
+  const bad = [{ name: "bad", panes: [{ type: "agent" }, { type: "shell", direction: "up" }] }];
+  const { v } = await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: AG("") })], bad, (v) => { v.layoutPick = "bad"; });
   assert.match(v.error, /needs direction/);
   assert.deepEqual(spaceNew(), []);
 });
@@ -625,18 +628,20 @@ test("the search box shows how many projects match", async () => {
 test("the detail card describes the highlighted project", async () => {
   const dir = makeRepo({ name: "Ada" });
   writeFileSync(join(dir, "a.txt"), "x\n");
-  const { v, cx } = await open([proj("demo", dir, { group: "platform", pinned: true, startup: { agent: "claude" }, worktree: { mode: "always" } })], undefined, { detail: true, gitInfo: true });
+  const { v, cx } = await open([proj("demo", dir, { group: "platform", pinned: true, startup: AG("claude"), worktree: { mode: "always" } })], undefined, { detail: true, gitInfo: true });
   state.spaces = [{ id: "s", folder: dir, machine: null, status: "working" }];
   await v.loadInfo(cx);
   const t = texts(v);
   for (const s of ["demo", "agent working", "Agent", "Claude Code", "Branch", "main", "Changes", "1 file modified", "Worktrees", "Last opened", "never",
-    "Enter creates a new worktree and opens the agent alone.", "Create worktree", "Checkout", "LAYOUT"]) assert.ok(t.includes(s), s);
+    "Enter creates a new worktree and opens the project's tabs.", "Create worktree", "Checkout", "LAYOUT"]) assert.ok(t.includes(s), s);
 });
 
 test("the card follows the highlight and says what each mode does", async () => {
-  const { v, cx } = await open([proj("a", "/r/a", { worktree: { mode: "never" } }), proj("b", "/r/b", { worktree: { mode: "ask" }, startup: { layout: "agent-terminal" } })]);
-  assert.match(texts(v), /Enter opens the checkout and opens the agent alone\./);
+  const { v, cx } = await open([proj("a", "/r/a", { worktree: { mode: "never" } }), proj("b", "/r/b", { worktree: { mode: "ask" } })]);
+  assert.match(texts(v), /Enter opens the checkout and opens the project's tabs\./);
   press(v, cx, "down");
+  assert.match(texts(v), /Enter asks for a branch name and opens the project's tabs\./);
+  v.layoutPick = "agent-terminal";
   assert.match(texts(v), /Enter asks for a branch name and opens agent \+ terminal below\./);
   assert.ok(texts(v).includes("Open…"));
 });
@@ -650,12 +655,12 @@ test("Last opened shows when the project was last used", async () => {
 });
 
 test("clicking a layout picture picks it for this launch; clicking the project's own clears the pick", async () => {
-  const { v, cx } = await open([proj("a", "/r/a", { startup: { layout: "agent-terminal" } })]);
+  const { v, cx } = await open([proj("a", "/r/a")]);
   const click = (label) => chips(v)[label].op("on_click")[0]();
-  click("Agent only");
-  assert.equal(v.layoutPick, "");
-  assert.ok(texts(v).includes("LAYOUT · PICKED"));
   click("Agent + terminal below");
+  assert.equal(v.layoutPick, "agent-terminal");
+  assert.ok(texts(v).includes("LAYOUT · PICKED"));
+  click("Project's tabs");
   assert.equal(v.layoutPick, null);
   assert.ok(!texts(v).includes("PICKED"));
   assert.ok(chips(v)["Agent + terminal below"]);
@@ -664,7 +669,7 @@ test("clicking a layout picture picks it for this launch; clicking the project's
 test("the card's layout pictures draw each layout's panes", async () => {
   const { v } = await open([proj("a", "/r/a")], LAYOUTS);
   const thumb = (label) => findAll(chips(v)[label], (e) => e.tag === "div" && e.has("absolute"));
-  assert.equal(thumb("Agent only").length, 1);
+  assert.equal(thumb("Project's tabs").length, 1);
   assert.equal(thumb("Agent + terminal below").length, 2);
   assert.equal(thumb("Agent, files and a terminal").length, 2);
 });
@@ -700,7 +705,7 @@ test("ctrl+alt+I hides the detail card, and the buttons and layout choice move u
   const t = texts(v);
   assert.ok(!t.includes("Last opened") && !t.includes("Enter creates a new worktree"), "no card");
   assert.ok(hasId(v, "pp-wt") && hasId(v, "pp-edit") && hasId(v, "pp-delete") && hasId(v, "pp-add"), "the action buttons are under the list");
-  for (const s of ["Layout", "Agent only", "Agent + terminal below", "Agent, files and a terminal", "Show details"]) assert.ok(t.includes(s), s);
+  for (const s of ["Layout", "Project's tabs", "Agent + terminal below", "Agent, files and a terminal", "Show details"]) assert.ok(t.includes(s), s);
   assert.deepEqual(findAll(rendered(v), (e) => /^pp-lay-/.test(e.op?.("id")?.[0] ?? "")), [], "no layout pictures");
 });
 
@@ -710,6 +715,22 @@ test("with the card on, the buttons are in the card only once and the layout cho
     assert.equal(findAll(rendered(v), (e) => e.op?.("id")?.[0] === id).length, 1, id);
   }
   assert.ok(texts(v).includes("Hide details"));
+});
+
+test("the card lists the project's tabs with pane counts, and its agent from any pane", async () => {
+  const { v } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "server", panes: [{ type: "shell" }, { type: "agent", agent: "codex", direction: "down" }] }, { name: "git", command: "lazygit" }] } })]);
+  const t = texts(v);
+  assert.match(t, /server ×2/); assert.match(t, /git/); assert.match(t, /Codex|codex/);
+});
+test("the card shows the description when there is one", async () => {
+  const { v } = await open([proj("shop", "/r/shop", { description: "the storefront" })]);
+  assert.match(texts(v), /the storefront/);
+});
+test("Enter builds the project's tabs: later tabs through herdr-app do tab.new", async () => {
+  const dir = realpathSync(makeRepo()); mkdirSync(join(dir, "web"));
+  const { v, cx } = await open([proj("shop", dir, { worktree: { mode: "never" }, startup: { tabs: [{ name: "a", command: "" }, { name: "web", folder: "web", command: "npm run dev" }] } })]);
+  enter(v); await cx.settle();
+  assert.deepEqual(state.tabsMade.map((t) => t.name), ["web"]);
 });
 
 test("a bare alt+I or ctrl+I does nothing", async () => {
@@ -1059,7 +1080,7 @@ test("a project is not hidden by the template: hideTemplate in the data file rem
 test("the template card says what it is and offers Use template, Edit and Delete only", async () => {
   const { v, cx } = await open([], undefined, T);
   const t = texts(v);
-  for (const s of ["Not a real project", "Agent", "Claude Code", "Layout", "agent-terminal", "Worktrees", "asks for a branch name", "Use template", "Edit", "Delete"]) assert.ok(t.includes(s), s);
+  for (const s of ["Not a real project", "Agent", "Claude Code", "Tabs", "Worktrees", "asks for a branch name", "Use template", "Edit", "Delete"]) assert.ok(t.includes(s), s);
   assert.ok(!hasId(v, "pp-open") && !hasId(v, "pp-checkout") && !hasId(v, "pp-wt"), "nothing that needs a folder");
 });
 
@@ -1246,8 +1267,8 @@ test("Export with nothing typed or an unwritable place says so", async () => {
 
 test("Import merge adds what is missing, keeps yours, and warns about folders this machine lacks", async () => {
   const file = backupPath();
-  writeFileSync(file, JSON.stringify({ format: "projects-backup", version: 1, projects: [{ name: "api", path: "/r/api", startup: { agent: "codex" } }, { name: "blog", path: "/nope/blog" }], layouts: [{ name: "solo", panes: [{ type: "agent" }] }] }));
-  const { v } = await open([proj("api", "/r/api", { startup: { agent: "claude" } })], undefined, {});
+  writeFileSync(file, JSON.stringify({ format: "projects-backup", version: 1, projects: [{ name: "api", path: "/r/api", startup: AG("codex") }, { name: "blog", path: "/nope/blog" }], layouts: [{ name: "solo", panes: [{ type: "agent" }] }] }));
+  const { v } = await open([proj("api", "/r/api", { startup: AG("claude") })], undefined, {});
   v.openBackup();
   v.backupPath.set_value(file);
   await v.importBackup("merge");
@@ -1256,7 +1277,7 @@ test("Import merge adds what is missing, keeps yours, and warns about folders th
   assert.deepEqual(rowNames(v), ["api", "blog"]);
   const saved = savedFile();
   assert.deepEqual(saved.projects.map((p) => p.name), ["api", "blog"]);
-  assert.equal(saved.projects[0].startup.agent, "claude");
+  assert.equal(saved.projects[0].startup.tabs[0].panes[0].agent, "claude");
   assert.deepEqual(saved.layouts.map((l) => l.name), ["solo"]);
 });
 
