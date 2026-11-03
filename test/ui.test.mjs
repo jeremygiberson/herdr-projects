@@ -424,6 +424,46 @@ test("Save shows tabPlan's message for a tab without a name and keeps the editor
   await v.save(cx);
   assert.equal(v.mode, "edit"); assert.match(v.error, /Tab 2 needs a name/);
 });
+test("removing the only tab and saving stores one shell tab, and the card still draws", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("shop", dir, { startup: AG("claude") })]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.removeTab();
+  assert.deepEqual(v.draft.startup.tabs, []);
+  assert.equal(v.tabAt, 0);
+  await v.save(cx);
+  assert.equal(v.error, null);
+  assert.deepEqual(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.tabs, [{ name: "shell", folder: "", command: "", panes: [] }]);
+  assert.doesNotThrow(() => texts(v));
+});
+test("the card draws a project whose tabs list is empty", async () => {
+  const { v } = await open([proj("shop", "/r/shop")]);
+  v.projects[0].startup.tabs = [];
+  assert.doesNotThrow(() => texts(v));
+});
+test("moving the first tab up or the last tab down changes nothing", async () => {
+  const { v, cx } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "a" }, { name: "b" }] } })]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.moveTab(-1);
+  assert.deepEqual([v.tabAt, v.draft.startup.tabs.map((t) => t.name)], [0, ["a", "b"]]);
+  v.selectTab(1); v.moveTab(1);
+  assert.deepEqual([v.tabAt, v.draft.startup.tabs.map((t) => t.name)], [1, ["a", "b"]]);
+});
+test("removing a tab's only pane leaves no pane selected", async () => {
+  const { v, cx } = await open([proj("shop", "/r/shop", { startup: AG("claude") })]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.paneAt = 0; v.removePane();
+  assert.deepEqual([v.paneAt, v.draft.startup.tabs[0].panes.length], [null, 0]);
+});
+test("moving a pane keeps what was typed in its boxes", async () => {
+  const { v, cx } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "a", panes: [{ type: "shell" }, { type: "command", command: "top", direction: "down" }] }] } })]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  const second = v.draft.startup.tabs[0].panes[1];
+  v.paneAt = 1; v.boxFor(second, "command").set_value("htop"); v.movePane(-1);
+  assert.equal(v.paneAt, 0);
+  assert.equal(v.draft.startup.tabs[0].panes[0], second);
+  assert.equal(v.boxFor(v.draft.startup.tabs[0].panes[0], "command").value(), "htop");
+});
 test("two agent panes from a layout save without a name clash", async () => {
   const dir = realpathSync(makeRepo());
   const pair = [{ name: "pair", panes: [{ type: "agent" }, { type: "agent", direction: "right" }] }];

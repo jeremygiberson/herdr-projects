@@ -542,6 +542,8 @@ export default class ProjectPresets extends View {
       this.collectTabs();
       for (const [key, state] of this.fields) TEXT.find(([k]) => k === key)[3](this.draft, key === "path" ? state.value() : state.value().trim());
       const d = this.draft;
+      // An emptied list stores the plain shell tab normalize gives a project with none.
+      if (!d.startup.tabs.length) d.startup.tabs = [{ name: "shell", folder: "", command: "", panes: [] }];
       tabPlan(d.startup.tabs);
       if (!d.name) throw new Error("Give the project a name");
       if (!d.template) {
@@ -1175,7 +1177,7 @@ export default class ProjectPresets extends View {
       .child(div().w(84).flex_none().text_color(t.dim).child(k))
       .child(div().flex_1().min_w(0).text_color(t.foreground).child(v));
     const current = this.layoutNameFor(p);
-    const choices = [{ name: "", label: "Project's tabs", panes: p.startup.tabs[0].panes }, ...this.layouts];
+    const choices = [{ name: "", label: "Project's tabs", panes: p.startup.tabs[0]?.panes ?? [] }, ...this.layouts];
     const [what, openLabel] = enterAction(p.worktree.mode);
     const shown = choices.find((c) => c.name === current);
     const dirtyText = info == null ? "…" : info.dirty ? `${info.dirty} file${info.dirty > 1 ? "s" : ""} modified` : "clean";
