@@ -98,8 +98,8 @@ export function shortHome(p, home) {
   return p === home || p.startsWith(home + "/") ? "~" + p.slice(home.length) : p;
 }
 
-/** "a ;; b" or "a\nb" to ["a", "b"]. */
-export const splitList = (text) => String(text ?? "").split(/;;|\r?\n/).map((x) => x.trim()).filter(Boolean);
+/** "a\nb" to ["a", "b"]: one entry per line, trimmed, blanks dropped. */
+export const splitList = (text) => String(text ?? "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
 export const joinList = (list) => (list ?? []).join("\n");
 
 /** Shell-style words: whitespace separated, with '…' and "…" keeping spaces together. */

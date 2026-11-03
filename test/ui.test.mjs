@@ -1709,3 +1709,11 @@ test("the card summarises setup", async () => {
   assert.match(texts(v), /1 copy · 2 setup · agent after setup/);
   v.at = 1; assert.match(texts(v), /no setup/);
 });
+
+test("a startup setup command containing ;; survives opening and saving the editor", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { startup: { setup: ["case x in a) ;; esac"] } })]);
+  press(v, cx, "e", { alt: true });
+  await v.save(cx);
+  assert.deepEqual(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.setup, ["case x in a) ;; esac"]);
+});

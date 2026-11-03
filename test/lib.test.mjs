@@ -30,7 +30,7 @@ test("expandHome", () => {
   assert.equal(expandHome("/srv/x", "/home/c"), "/srv/x");
 });
 
-test("splitList", () => assert.deepEqual(splitList(" npm ci ;; cp a b ;;"), ["npm ci", "cp a b"]));
+test("splitList", () => assert.deepEqual(splitList(" npm ci \n cp a b \n"), ["npm ci", "cp a b"]));
 
 test("normalize keeps overrides and fills defaults", () => {
   const p = normalize({ path: "/r/x", git: { base: "develop" } });
@@ -576,8 +576,8 @@ test("normalize fills copy, worktree setup, quickSetup and quickLaunch, dropping
   assert.deepEqual([p.worktree.copy, p.worktree.setup, p.startup.quickSetup, p.quickLaunch], [[".env", ".claude/*"], ["npm ci"], false, false]);
   assert.deepEqual(normalize(p), p);
 });
-test("splitList takes ;; or newlines; joinList writes lines", () => {
-  assert.deepEqual(splitList("a ;; b\nc\n\n"), ["a", "b", "c"]);
+test("splitList takes newlines only; joinList writes lines", () => {
+  assert.deepEqual(splitList("a\nb\nc\n\n"), ["a", "b", "c"]);
   assert.equal(joinList(["a", "b"]), "a\nb");
 });
 test("shq single-quotes a word, escaping embedded quotes", () => {
