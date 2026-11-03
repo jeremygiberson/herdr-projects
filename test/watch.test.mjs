@@ -24,7 +24,7 @@ function addSpace(id, folder, program = SHELL, over = {}) {
 
 /** A Watcher with recording fakes for its injected functions (real git underneath repoKey, branchOf, realPath),
  *  and a fake cx whose timer is captured and whose spawn runs at once. */
-function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent = null, build = null, loadConfig = null, active = undefined } = {}) {
+function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent = null, build = null, loadConfig = null, active = undefined, result = {} } = {}) {
   const rec = { builds: [], setups: [], repoKeys: [], logs: [], order: [], timer: null };
   const tasks = [];
   const cx = { timer: { every: (ms, fn) => { rec.timer = { ms, fn }; } }, spawn: (fn) => { tasks.push(fn(cx)); } };
@@ -34,7 +34,7 @@ function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent =
     buildWorkspace: async ({ log, ...a }) => {
       rec.builds.push(a);
       if (build) await build(a);
-      return { space: a.existing.space, agentTerminal: null };
+      return { space: a.existing.space, agentTerminal: null, problems: 0, ...result };
     },
     repoKey: async (f) => { rec.repoKeys.push(f); return G.repoKey(f); },
     branchOf: G.branchOf,
@@ -224,8 +224,8 @@ test("a repo that is not a project falls back to autoLayouts and defaultAgent", 
   const dir = makeRepo();
   const wt = join(scratch("pp-wt"), "release");
   sh(dir, "worktree", "add", "-q", "-b", "release", wt);
-  // A project on the repo without autoLayout, and the template, don't claim it.
-  const projects = [apiProject(dir, { worktree: { autoLayout: false } }), { ...apiProject(dir), name: "Template", template: true }];
+  // A template on the repo doesn't claim it.
+  const projects = [{ ...apiProject(dir), name: "Template", template: true }];
   const layouts = [
     { name: "pair", panes: [{ name: "agent", type: "agent" }, { name: "shell", type: "shell", direction: "right" }] },
     { name: "deploy", tabs: [{ name: "deploy", command: "make deploy" }] },
@@ -330,4 +330,78 @@ test("a throw while reading the app is logged and toasted", async () => {
   assert.equal(rec.logs.filter((l) => l.level === "error").length, 1);
   assert.equal(state.notified.length, 1);
   assert.equal(state.notified[0].level, "error");
+});
+
+test("a repo whose project has auto-layout off is left alone, even when an autoLayouts entry names it", async () => {
+  const dir = makeRepo();
+  const layouts = [{ name: "pair", panes: [{ name: "agent", type: "agent" }, { name: "shell", type: "shell", direction: "right" }] }];
+  const { w, cx, rec, tick } = harness({ projects: [apiProject(dir, { worktree: { autoLayout: false } })], layouts, autoLayouts: [{ repo: "*", branch: "", layout: "pair" }] });
+  w.start(cx);
+  addSpace("s1", dir);
+  await tick();
+  assert.deepEqual(rec.builds, []);
+  assert.deepEqual(state.notified, []);
+  assert.ok(rec.logs.some((l) => l.message.startsWith("watcher: left alone") && l.data?.space === "s1"));
+});
+
+test("a project in a subfolder of its repo: a space there is the checkout, a space in a worktree is built in the worktree's subfolder", async () => {
+  const dir = makeRepo();
+  const pkg = join(dir, "pkg");
+  mkdirSync(pkg);
+  const wt = join(scratch("pp-wt"), "feat");
+  sh(dir, "worktree", "add", "-q", "-b", "feat", wt);
+  mkdirSync(join(wt, "pkg"));
+  const p = apiProject(pkg);
+  const { w, cx, rec, tick } = harness({ projects: [p] });
+  w.start(cx);
+  addSpace("s1", pkg);
+  await tick();
+  addSpace("s2", wt);
+  await tick();
+  assert.deepEqual(rec.setups.map((s) => [s.folder, s.isWorktree]), [[pkg, false], [join(wt, "pkg"), true]]);
+  assert.deepEqual(rec.builds.map((b) => b.folder), [pkg, join(wt, "pkg")]);
+});
+
+test("while this computer's layout is still loading, new spaces are only marked seen", async () => {
+  const dir = makeRepo();
+  state.machines = [{ name: "box", layout: "ready" }, { name: null, layout: "loading" }];
+  const { w, cx, rec, tick } = harness({ projects: [apiProject(dir)] });
+  w.start(cx);
+  addSpace("s1", dir);
+  await tick();
+  assert.ok(w.seen.has("s1"));
+  assert.deepEqual(rec.builds, []);
+  state.machines = [{ name: null, layout: "ready" }];
+  await tick();
+  assert.deepEqual(rec.builds, [], "a space restored while loading stays seen");
+  addSpace("s2", dir);
+  await tick();
+  assert.deepEqual(rec.builds.map((b) => b.existing.space), ["s2"]);
+});
+
+test("an agent at its trust prompt (no agent record, the pane's program is an agent) is adopted", async () => {
+  const dir = makeRepo();
+  const { w, cx, rec, tick } = harness({ projects: [apiProject(dir)] });
+  w.start(cx);
+  addSpace("s1", dir, CLAUDE);
+  await tick();
+  assert.equal(rec.builds.length, 1);
+  assert.equal(rec.builds[0].existing.agent, true);
+  assert.equal(rec.builds[0].existing.terminal, "t-s1");
+});
+
+test("a build with problems says so in its toast; a build skipped under the lock toasts nothing", async () => {
+  const dir = makeRepo();
+  const one = harness({ projects: [apiProject(dir)], result: { problems: 2 } });
+  one.w.start(one.cx);
+  addSpace("s1", dir);
+  await one.tick();
+  assert.deepEqual(state.notified.map((n) => n.body), [`Api set up in ${basename(dir)} with 2 problems (see the log)`]);
+  reset();
+  const two = harness({ projects: [apiProject(dir)], result: { problems: 1, skipped: true } });
+  two.w.start(two.cx);
+  addSpace("s2", dir);
+  await two.tick();
+  assert.equal(two.rec.builds.length, 1);
+  assert.deepEqual(state.notified, []);
 });

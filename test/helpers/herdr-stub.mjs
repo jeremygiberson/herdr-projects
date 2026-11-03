@@ -38,10 +38,12 @@ export const state = {
   agents: [],           // what agents() reports: { address, pane, space, tab }
   panes: [],            // what panes() reports: { pane, terminal, tab, cwd, program: { shell, agent } }
   notified: [],         // every notify(...)
+  machines: undefined,  // what machines() reports; undefined: this computer, its layout ready
+  screen: undefined,    // what `hc read` prints; undefined: a bare "$ " prompt
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], closed: 0, platform: "linux", picked: null, props: undefined });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], machines: undefined, screen: undefined, closed: 0, platform: "linux", picked: null, props: undefined });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -51,6 +53,7 @@ export const appHome = () => state.appHome;
 export const spaces = () => { count("spaces"); return state.spaces.map((s) => ({ machine: null, tabs: [{ id: `tb-${s.id}`, name: "1", panes: 1 }], ...s })); };
 export const agents = () => state.agents;
 export const panes = () => state.panes;
+export const machines = () => state.machines ?? [{ name: null, layout: "ready" }];
 export const notify = (n) => { state.notified.push(n); return `n${state.notified.length}`; };
 export const layouts = () => state.layoutNames ?? ["main"];
 export const layout = () => state.layout ?? null; // the shown layout tree; null is a layout without any of our blocks
@@ -122,6 +125,7 @@ function hcNow(args) {
     const status = t?.status ? { app: t.agent ?? "agent", state: t.status } : null;
     return t ? ok(JSON.stringify({ ...t, status, foreground: { name: state.foreground } })) : { code: 3, stdout: "", stderr: "not_found\n" };
   }
+  if (cmd === "read") return ok(state.screen ?? "$ ");
   if (cmd === "send") {
     // Like the real hc, a text starting with "-" is read as an option unless it comes after "--".
     const [terminal, ...words] = rest;

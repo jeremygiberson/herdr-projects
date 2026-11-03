@@ -1,8 +1,8 @@
 // The resident watcher: the copy of the mod kept in the layout notices a space opened outside the picker (the
 // app's New worktree, the new-space shortcut) on an auto-layout project's checkout or worktree, or on a repo an
 // `autoLayouts` entry names, and builds the tabs into it. A space is considered once, when it first appears.
-import { spaces, agents, panes, shared, home, notify } from "herdr";
-import { projectFolder, inspect } from "./git.js";
+import { spaces, agents, panes, shared, home, notify, machines } from "herdr";
+import { projectFolder, inspect, gitDir } from "./git.js";
 import { matchAutoLayout, tabsForAuto, blankProject, basename, repoNameFromKey } from "./lib.js";
 
 const OPENING = "projects.opening"; // { [folder]: when the picker started opening it }, written by buildWorkspace
@@ -30,9 +30,10 @@ export class Watcher {
   }
 
   /** Queues each space not seen before, as it is now (its folder is read here, once). Never waits. While inactive a new
-   *  space is only marked seen: the active copy handles it, and it is never picked up later. */
+   *  space is only marked seen: the active copy handles it, and it is never picked up later. So is one that appears
+   *  while this computer's layout is still loading: those are the spaces the app restores at start. */
   tick(cx) {
-    const active = this.active();
+    const active = this.active() && machines().find((m) => m.name === null)?.layout === "ready";
     for (const space of spaces()) {
       if (this.seen.has(space.id)) continue;
       this.seen.add(space.id);
@@ -55,11 +56,14 @@ export class Watcher {
       if (at && Date.now() - at < OPENING_MS) return skip("the picker is opening it");
       const agent = agents().find((a) => a.space === space.id);
       const pane = panes().find((p) => p.tab === space.tabs[0].id);
-      if (!agent && !pane?.program?.shell) return skip("its pane runs neither a shell nor an agent");
+      // An agent at its trust prompt reports no status, so agents() may not list it yet; its pane's program says agent.
+      const isAgent = Boolean(agent || pane?.program?.agent);
+      if (!isAgent && !pane?.program?.shell) return skip("its pane runs neither a shell nor an agent");
 
       const key = await this.repoKey(space.folder);
       if (!key) return skip("not in a git repo");
-      // A space in a subfolder of a checkout is that checkout: its top level is the folder set up and built.
+      // A main checkout's own git dir is the common dir; a linked worktree's is .git/worktrees/<name> under it.
+      const isWorktree = (await gitDir(space.folder)) !== key;
       const top = await this.realPath((await inspect(space.folder)).top);
       let config;
       try { config = await this.loadConfig(); } catch (e) {
@@ -75,37 +79,48 @@ export class Watcher {
         if (p.worktree.autoLayout && !p.template && (await keyOf(projectFolder(p))) === key) { project = p; break; }
       }
       const branch = await this.branchOf(space.folder);
-      let entry = null, repo, isWorktree;
+      let entry = null, repo, folder;
       if (project) {
-        const main = projectFolder(project);
-        repo = basename(main);
-        isWorktree = top !== (await this.realPath(main));
+        const main = await this.realPath(projectFolder(project));
+        repo = basename(projectFolder(project));
+        if (!isWorktree) folder = main; // the checkout, or a subfolder of it: the project's own folder
+        else {
+          // A worktree: the project's folder relative to its own checkout's top level, under the worktree's.
+          const projectTop = await this.realPath((await inspect(main)).top);
+          folder = top + (main === projectTop ? "" : main.slice(projectTop.length));
+        }
       } else {
         repo = repoNameFromKey(key, top);
         entry = matchAutoLayout(config.autoLayouts, repo, branch);
         if (!entry) return skip("no auto-layout project or entry for its repo");
-        // A main checkout's common dir is its own .git; a linked worktree's is the main checkout's.
-        isWorktree = `${top}/.git` !== key;
+        // A repo that is a project belongs to that project: with its auto-layout off, the global list doesn't apply.
+        for (const p of config.projects) {
+          if (!p.template && (await keyOf(projectFolder(p))) === key) return skip(`its project ${p.name} has auto-layout off`);
+        }
+        folder = top;
       }
 
-      const base = project ?? blankProject(top);
+      const base = project ?? blankProject(folder);
       const tabs = tabsForAuto({ project, layouts: config.layouts, entry, defaultAgent: config.defaultAgent });
       const say = (m) => this.log("debug", m);
       // quickSetup means "run setup inline on the picker's busy screen"; there is no such screen here, so for a
       // quickSetup project the chain runs the steps (in the setup tab or before the agent) and touches the marker.
       const forSetup = base.startup.quickSetup ? { ...base, startup: { ...base.startup, quickSetup: false } } : base;
-      const { chain } = await this.prepareSetup({ project: forSetup, folder: top, isWorktree, branch, repo, home: home(), log: say });
-      this.log("debug", "watcher: setting up", { space: space.id, folder: space.folder, project: project?.name ?? null, layout: entry?.layout ?? null, agent: Boolean(agent) });
-      await this.buildWorkspace({
-        project: base, folder: top, name: space.name, tabs, prompt: "",
+      const { chain } = await this.prepareSetup({ project: forSetup, folder, isWorktree, branch, repo, home: home(), log: say });
+      this.log("debug", "watcher: setting up", { space: space.id, folder: space.folder, project: project?.name ?? null, layout: entry?.layout ?? null, agent: isAgent });
+      const built = await this.buildWorkspace({
+        project: base, folder, name: space.name, tabs, prompt: "",
         agentTiming: project?.startup.agentTiming ?? "with", chain, log: say,
         existing: {
           space: space.id, tab: space.tabs[0].id,
           pane: pane?.pane ?? agent.pane, terminal: pane?.terminal ?? agent.address,
-          folder: space.folder, agent: Boolean(agent),
+          folder: space.folder, agent: isAgent,
         },
       });
-      notify({ title: "Projects", body: `${project?.name ?? entry.layout} set up in ${space.name}` });
+      // Skipped: the space changed before the build got its turn (buildWorkspace logged it).
+      if (built?.skipped) return;
+      const n = built?.problems ?? 0;
+      notify({ title: "Projects", body: `${project?.name ?? entry.layout} set up in ${space.name}${n ? ` with ${n} problem${n === 1 ? "" : "s"} (see the log)` : ""}` });
     } catch (e) {
       this.log("error", `watcher: couldn't set up ${space.name}: ${e?.message ?? e}`, { space: space.id, folder: space.folder });
       notify({ title: "Projects", body: `couldn't set up ${space.name}: ${e?.message ?? e}`, level: "error" });

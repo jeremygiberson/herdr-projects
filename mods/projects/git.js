@@ -147,6 +147,15 @@ export async function repoKey(folder) {
   } catch { return null; }
 }
 
+/** The folder's own git dir, real path: its common dir (repoKey) in a main checkout, `.git/worktrees/<name>` in a
+ *  linked worktree; null outside a repo. */
+export async function gitDir(folder) {
+  try {
+    const r = await git(folder, ["rev-parse", "--absolute-git-dir"]);
+    return r.code === 0 && out(r) ? await realPath(out(r)) : null;
+  } catch { return null; }
+}
+
 /** The branch checked out in a folder ("HEAD" when detached); null outside a repo. */
 export async function branchOf(folder) {
   try {
