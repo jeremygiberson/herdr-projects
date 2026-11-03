@@ -43,15 +43,15 @@ export class Watcher {
    *  Anything else is left alone (logged at debug). Never throws; a failure is logged and toasted. */
   async consider(space) {
     const skip = (why) => this.log("debug", `watcher: left alone, ${why}`, { space: space.id, folder: space.folder });
-    if (space.machine !== null) return skip("on another machine");
-    if (space.tabs?.length !== 1 || space.tabs[0].panes !== 1) return skip("not one tab with one pane");
-    const at = shared(OPENING)?.[space.folder];
-    if (at && Date.now() - at < OPENING_MS) return skip("the picker is opening it");
-    const agent = agents().find((a) => a.space === space.id);
-    const pane = panes().find((p) => p.tab === space.tabs[0].id);
-    if (!agent && !pane?.program?.shell) return skip("its pane runs neither a shell nor an agent");
-
     try {
+      if (space.machine !== null) return skip("on another machine");
+      if (space.tabs?.length !== 1 || space.tabs[0].panes !== 1) return skip("not one tab with one pane");
+      const at = shared(OPENING)?.[space.folder];
+      if (at && Date.now() - at < OPENING_MS) return skip("the picker is opening it");
+      const agent = agents().find((a) => a.space === space.id);
+      const pane = panes().find((p) => p.tab === space.tabs[0].id);
+      if (!agent && !pane?.program?.shell) return skip("its pane runs neither a shell nor an agent");
+
       const key = await this.repoKey(space.folder);
       if (!key) return skip("not in a git repo");
       // A space in a subfolder of a checkout is that checkout: its top level is the folder set up and built.

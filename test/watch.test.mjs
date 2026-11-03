@@ -284,3 +284,32 @@ test("an unreadable projects file is toasted once and logged every time", async 
   assert.equal(state.notified[0].level, "error");
   assert.match(state.notified[0].body, /not valid JSON/);
 });
+
+test("a quickSetup project's steps go to the chain: prepareSetup gets quickSetup false, its chain reaches the build", async () => {
+  const dir = makeRepo();
+  const p = apiProject(dir, { worktree: { autoLayout: true, setup: ["x"] }, startup: { ...apiProject(dir).startup, quickSetup: true } });
+  assert.equal(p.startup.quickSetup, true);
+  const { w, cx, rec, tick } = harness({ projects: [p] });
+  w.start(cx);
+  addSpace("s1", dir);
+  await tick();
+  assert.equal(rec.setups.length, 1);
+  assert.equal(rec.setups[0].project.startup.quickSetup, false);
+  assert.deepEqual(rec.setups[0].project, { ...p, startup: { ...p.startup, quickSetup: false } });
+  assert.equal(rec.builds.length, 1);
+  assert.equal(rec.builds[0].chain, `chain:${dir}`);
+  assert.equal(rec.builds[0].project, p);
+});
+
+test("a throw while reading the app is logged and toasted", async () => {
+  const dir = makeRepo();
+  const { w, cx, rec, tick } = harness({ projects: [apiProject(dir)] });
+  w.start(cx);
+  addSpace("s1", dir);
+  state.panes = null; // panes().find throws
+  await tick();
+  assert.deepEqual(rec.builds, []);
+  assert.equal(rec.logs.filter((l) => l.level === "error").length, 1);
+  assert.equal(state.notified.length, 1);
+  assert.equal(state.notified[0].level, "error");
+});
