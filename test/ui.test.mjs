@@ -1568,15 +1568,39 @@ test("the Launcher button rewrites a layout whose blocks still name the retired 
   assert.equal(v.error, null);
 });
 
-/** The copy of the mod a launcher block loads: props() carries the block's slot. */
-function openLauncher(slot = "sidebar") {
+/** The copy of the mod a launcher block loads: props() carries the block's slot. `before` runs after the reset. */
+function openLauncher(slot = "sidebar", before = () => {}) {
   reset();
   state.props = { slot };
-  const cx = { timers: [], every: [], timer: { after: (ms, fn) => cx.timers.push({ ms, fn }), every: (ms, fn) => cx.every.push({ ms, fn }) }, spawn: (fn) => fn(cx), focus_handle: () => ({}), notify() {}, stop_propagation() {} };
+  before();
+  const pending = [];
+  const cx = { timers: [], every: [], timer: { after: (ms, fn) => cx.timers.push({ ms, fn }), every: (ms, fn) => cx.every.push({ ms, fn }) }, spawn: (fn) => { const p = fn(cx); pending.push(p); return p; }, focus_handle: () => ({}), notify() {}, stop_propagation() {} };
   const v = new Picker();
   v.init({}, cx);
-  return { v, cx };
+  return { v, cx, settle: () => Promise.all(pending) };
 }
+
+test("the launcher copy drops recent entries whose folder is gone", async () => {
+  const keep = scratch("pp-recent");
+  const { settle } = openLauncher("sidebar", () => setShared("projects.recent", { [keep]: 1, "/no/such/folder": 2 }));
+  await settle();
+  const { shared } = await import("./helpers/herdr-stub.mjs");
+  assert.deepEqual(shared("projects.recent"), { [keep]: 1 });
+});
+
+test("with a <layout>-launcher layout already there, the Launcher button switches to it instead of writing another copy", async () => {
+  const { v, cx } = await open([proj("alpha", "/r/a")]);
+  setShared("layout", "main");
+  state.layoutNames = ["main", "main-launcher"];
+  state.layout = { id: "root", children: [{ id: "sidebar", children: [{ id: "spaces", type: "block", size: { weight: 1 } }] }] };
+  v.refreshSnap();
+  state.runs.length = 0;
+  v.cycleLauncher();
+  await cx.settle();
+  assert.deepEqual(state.runs.map((r) => [r.command, r.args.name]), [["layout.switch", "main-launcher"]]);
+  assert.equal(existsSync(`${state.appHome}/layouts/main-launcher-2.json`), false);
+  assert.equal(v.error, null);
+});
 
 test("loaded by a launcher block, the mod draws the Projects button and runs the watcher, with no picker", () => {
   const { v, cx } = openLauncher("sidebar");

@@ -96,6 +96,16 @@ export default class ProjectPresets extends View {
       // Every launcher block's copy is alive once shown, hidden or not: only the chosen slot's watcher acts.
       this.watcher = new Watcher({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active: () => (shared(LAUNCHER) ?? "sidebar") === this.slot });
       this.watcher.start(cx);
+      // Recent entries for folders that are gone (throwaway checkouts) would otherwise stay in shared state for good.
+      cx.spawn(async () => {
+        const gone = [];
+        for (const path of Object.keys(shared(RECENT) ?? {})) if (!(await folderExists(expandHome(path, home())))) gone.push(path);
+        if (!gone.length) return;
+        const now = { ...(shared(RECENT) ?? {}) };
+        for (const path of gone) delete now[path];
+        setShared(RECENT, now);
+        log("debug", "dropped recent entries whose folder is gone", { gone });
+      });
       return;
     }
     this.cx = cx;
@@ -322,13 +332,21 @@ export default class ProjectPresets extends View {
   }
 
   /** The shown layout has no launcher blocks (herdr's own layouts have none, and it won't let a mod change those): writes a
-   *  copy of the shown layout with the blocks to layouts/<name>-launcher.json and switches to it. The copy is built from the
+   *  copy of the shown layout with the blocks to layouts/<name>-launcher.json and switches to it (or only switches, when
+   *  that copy exists already). The copy is built from the
    *  tree in hand and written as a file, so nothing waits on herdr finishing a clone. Your own layouts are never edited. */
   setupLauncher() {
     const from = shared("layout") ?? "main";
     const taken = new Set(layouts());
-    let as = `${from}-launcher`;
-    for (let n = 2; taken.has(as); n++) as = `${from}-launcher-${n}`;
+    // A copy made earlier (from this layout, then switched away from): switch back to it rather than write another.
+    if (taken.has(`${from}-launcher`)) {
+      log("info", "switching to the launcher copy made earlier", { from });
+      run("layout.switch", { name: `${from}-launcher` });
+      this.snap = { ...this.snap, launcherInLayout: true };
+      this.cx.notify();
+      return;
+    }
+    const as = `${from}-launcher`;
     const { tree, added } = withLauncherBlocks(layout());
     log("info", "adding the launcher blocks", { from, as, added });
     if (!added.length) return this.fail("launcher", new Error("this layout has no spaces, status or tabs block to put the button beside"));

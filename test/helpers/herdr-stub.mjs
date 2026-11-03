@@ -43,7 +43,7 @@ export const state = {
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], machines: undefined, screen: undefined, closed: 0, platform: "linux", picked: null, props: undefined });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], machines: undefined, screen: undefined, layoutNames: undefined, closed: 0, platform: "linux", picked: null, props: undefined });
   for (const k of Object.keys(store)) delete store[k];
 }
 
