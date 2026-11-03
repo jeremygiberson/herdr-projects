@@ -1,18 +1,36 @@
 // Everything that creates spaces, tabs and panes: a project's tabs become app commands here and nowhere else.
-import { exec, hc, run, spaces, home, appHome, writeTextFile } from "herdr";
+import { exec, hc, run, spaces, home, appHome, writeTextFile, shared, setShared } from "herdr";
 import { log as diag } from "./log.js";
-import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder, chainThenAgent, chainAlone, commandName } from "./lib.js";
+import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder, chainThenAgent, chainAlone, commandName, shq } from "./lib.js";
 import { folderExists, findSpace, projectFolder } from "./git.js";
 
 const sleep = (s) => exec("sleep", [String(s)]);
 
 // Launches take turns creating their space: the new terminal is found as "new since a snapshot",
-// which two overlapping launches into one folder would otherwise mix up.
+// which two overlapping launches into one folder would otherwise mix up. The turn is held in shared
+// state ("projects.lock": { since }) so the picker's copy and the resident watcher's copy take turns
+// too; the promise chain below is a second guard inside one copy.
 let spaceLock = Promise.resolve();
 // A turn that hangs (hc not answering) gives up its place after this long so later launches still run.
 export const lockSettings = { seconds: 25 };
+const LOCK = "projects.lock";
+
+/** Runs `fn` holding the shared lock: waits while another copy's lock is younger than lockSettings.seconds. */
+async function sharedTurn(fn) {
+  for (;;) {
+    const held = shared(LOCK);
+    if (!held?.since || Date.now() - held.since >= lockSettings.seconds * 1000) break;
+    await sleep(0.25);
+  }
+  const mine = { since: Date.now() };
+  setShared(LOCK, mine);
+  try { return await fn(); }
+  // A turn that outlived its lock (another copy took it over) leaves the newer holder's lock alone.
+  finally { if (shared(LOCK)?.since === mine.since) setShared(LOCK, null); }
+}
+
 const exclusive = (fn) => {
-  const result = spaceLock.then(fn);
+  const result = spaceLock.then(() => sharedTurn(fn));
   const done = result.then(() => {}, () => {});
   spaceLock = Promise.race([done, sleep(lockSettings.seconds).then(() => {}, () => {})]);
   return result;
@@ -128,6 +146,29 @@ async function tabShown(space, tab) {
   return false;
 }
 
+/** Types a shell `line` into `terminal` (hc send pastes it and presses Enter) once a shell is the
+ *  foreground program; when no shell comes to the front within 10 s the line is skipped and logged. */
+async function typeLine(terminal, line) {
+  for (let i = 0; i < 20; i++) {
+    let fg = null;
+    try { fg = JSON.parse((await hc(["get", terminal, "--json"])).stdout).foreground?.name ?? null; } catch {}
+    if (SHELLS.has(fg)) {
+      const r = await hc(["send", terminal, "--", line]);
+      if (r.code !== 0) diag("error", `hc send failed: ${r.stderr.split("\n")[0]}`, { terminal });
+      return;
+    }
+    await sleep(0.5);
+  }
+  diag("error", "couldn't type into the new space's shell", { terminal, line });
+}
+
+/** The space, first pane and first terminal of a space the app already made (the watcher's case), in the
+ *  shape the space.new path finds; a plain shell there is given pane (0,0)'s line, an agent is left alone. */
+async function adoptExisting(existing, line) {
+  if (!existing.agent && line) await typeLine(existing.terminal, line);
+  return { space: existing.space, pane: existing.pane, terminal: existing.terminal ?? null };
+}
+
 /** Runs the setup chain in its own tab of `space` (a labeled `hc run`, which herdr shows as a tab there),
  *  named "setup"; the tab closes when the chain succeeds and stays at a shell when it fails.
  *  Resolves to whether the chain started; when it didn't, `log` (the busy screen) says why. */
@@ -163,8 +204,12 @@ async function startPromptHelper(terminal, prompt, program) {
  *  `chain` (the setup commands, or "") runs before the agent in its own pane when `agentTiming` is "after",
  *  or beside it in a setup tab when "with" (or when there is no agent).
  *  Returns the new space and the first agent's terminal when it is known. */
-export async function buildWorkspace({ project, folder, name, tabs, prompt, agentTiming = "with", chain = "", log }) {
+export async function buildWorkspace({ project, folder, name, tabs, prompt, agentTiming = "with", chain = "", log, existing = null }) {
   const plan = tabPlan(tabs);
+  // Building into a space the app already made: no prompt; an agent already running there is the plan's
+  // first agent, so the chain can't run before it and goes to a setup terminal instead.
+  if (existing) prompt = "";
+  if (existing?.agent) agentTiming = "with";
   const env = await readEnv();
 
   // A pane's folder is relative to its tab's folder, which is relative to the project folder.
@@ -189,12 +234,24 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
   const after = Boolean(chain && leadArgv.length && agentTiming === "after");
   const isFirst = (ti, pi) => ti === 0 && pi === 0;
   const isLead = (ti, pi) => lead?.tab === ti && lead?.index === pi;
+  // The existing space's agent fulfils the plan's first agent pane: elsewhere, that pane is a plain shell.
+  const adopted = (ti, pi) => Boolean(existing?.agent && isLead(ti, pi));
   const argvOf = (ti, pi) => {
     const pane = plan[ti].panes[pi];
     if (pane.type === "command") return ["sh", "-c", pane.command];
+    if (adopted(ti, pi)) return [];
     const argv = agentArgv(pane);
     if (after && isLead(ti, pi)) return ["sh", "-c", chainThenAgent(chain, argv, arg ? prompt : "", dirs[ti][pi])];
     return argv.length && arg && isLead(ti, pi) && !isFirst(ti, pi) ? [...argv, prompt] : argv;
+  };
+  /** Pane (0,0)'s program as a line typed into a plain shell: the chain-then-agent line, `exec` the agent,
+   *  or the command; "" for a shell pane. */
+  const lineOf00 = () => {
+    const pane = plan[0].panes[0];
+    if (pane.type === "command") return pane.command;
+    const argv = argvOf(0, 0);
+    if (after && isLead(0, 0)) return argv[2];
+    return argv.length ? `exec ${argv.map(shq).join(" ")}` : "";
   };
 
   /** Splits a tab's first pane into the rest of its panes; a failed split ends this tab's panes. */
@@ -212,9 +269,14 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     return { ids, terminals };
   }
 
-  const { space, agentTerminal, focusPane } = await exclusive(async () => {
+  /** Opens the space with space.new and finds it (and, for a send prompt, its first terminal). */
+  async function openSpace() {
     const spacesBefore = new Set(spaces().map((s) => s.id));
     const known = send ? new Set((await liveTerminals()).map((t) => t.address)) : null;
+    // The resident watcher skips a space for a folder the picker is opening (entries go stale after 5 min).
+    const now = Date.now();
+    const opening = Object.fromEntries(Object.entries(shared("projects.opening") ?? {}).filter(([, at]) => now - at < 5 * 60000));
+    setShared("projects.opening", { ...opening, [dirs[0][0]]: now });
     // Herdr nests a worktree's space under its repo's own space, but only while that one is open.
     const main = projectFolder(project);
     if (project.worktree.repoSpace && folder !== main && !findSpace(project)) {
@@ -230,14 +292,22 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
     // focused() can still be the window the picker was opened from just after space.new, so the new
     // space and its first pane come from `herdr-app ls`: the space that wasn't there before.
     const here = await findNewSpace(spacesBefore, name, dirs[0][0]);
-    const space = here?.space ?? null;
     // Found before the split panes exist, which also start in this folder.
-    const firstTerminal = send && isLead(0, 0) ? await findNewTerminal(known, dirs[0][0]) : here?.terminal ?? null;
+    if (here && send && isLead(0, 0)) here.terminal = await findNewTerminal(known, dirs[0][0]);
+    return here;
+  }
+
+  const { space, agentTerminal, focusPane } = await exclusive(async () => {
+    const here = existing ? await adoptExisting(existing, lineOf00()) : await openSpace();
+    const space = here?.space ?? null;
+    const firstTerminal = here?.terminal ?? null;
     const paneIds = [];
-    let agentTerminal = isLead(0, 0) ? firstTerminal : null;
-    let agentPane = isLead(0, 0) ? here?.pane ?? null : null;
+    // An agent already running in the existing pane is the agent, wherever the plan put its first agent pane.
+    const agentFirst = isLead(0, 0) || Boolean(existing?.agent);
+    let agentTerminal = agentFirst ? firstTerminal : null;
+    let agentPane = agentFirst ? here?.pane ?? null : null;
     const noteAgent = (ti, split) => {
-      if (lead?.tab !== ti) return;
+      if (lead?.tab !== ti || existing?.agent) return;
       const pname = plan[ti].panes[lead.index].name;
       agentPane = split.ids[pname] ?? agentPane;
       agentTerminal = split.terminals[pname] ?? agentTerminal;

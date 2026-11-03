@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, realpathSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { makeRepo, scratch } from "./helpers/repo.mjs";
 
-const { state, reset } = await import("./helpers/herdr-stub.mjs");
+const { state, reset, shared, setShared } = await import("./helpers/herdr-stub.mjs");
 const W = await import("../mods/projects/workspace.js");
 const { normalize, tabsForLaunch } = await import("../mods/projects/lib.js");
 
@@ -328,4 +328,130 @@ test("after timing with a send prompt removes the prompt file when the helper ca
   await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "go", agentTiming: "after", chain: "true", log: () => {} });
   const run = state.hcRuns[0].args;
   assert.equal(existsSync(run[run.length - 2]), false);
+});
+
+// ---- phase 3: the shared lock, the opening marker, and building into a space that already exists ----
+
+test("the shared lock is taken for a build and released after it; a stale lock is ignored", async () => {
+  const dir = repo();
+  setShared("projects.lock", { since: Date.now() - 30000 });
+  const started = Date.now();
+  let done = false, seen = null;
+  // send mode looks up terminals with hc inside the locked turn, which gives the loop below a turn mid-build
+  const building = build(project(dir, { startup: { agent: "claude", prompt: "go", promptMode: "send" } }), dir, "Demo").finally(() => { done = true; });
+  while (!done) {
+    const l = shared("projects.lock");
+    if (l && Date.now() - l.since < 5000) seen ??= l;
+    await new Promise((r) => setImmediate(r)); // the stub's hc answers on setImmediate too, so this reads mid-build
+  }
+  await building;
+  assert.ok(seen && seen.since >= started, "a recent lock is held during the build");
+  assert.equal(shared("projects.lock"), null);
+  assert.ok(Date.now() - started < 5000, "the stale lock was not waited on");
+  // a second build in a row is not held up by the first
+  await build(project(dir, { startup: { agent: "claude" } }), dir, "Demo");
+  assert.equal(spaceNews().length, 2);
+  assert.equal(shared("projects.lock"), null);
+});
+test("the shared lock is released when the build throws inside it", async () => {
+  const dir = repo();
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "a" }] } });
+  // a project without its worktree settings fails inside the locked turn
+  await assert.rejects(W.buildWorkspace({ project: { ...p, worktree: undefined }, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", log: () => {} }));
+  assert.equal(shared("projects.lock"), null);
+});
+test("a fresh shared lock held by another copy is waited on", async () => {
+  const dir = repo();
+  setShared("projects.lock", { since: Date.now() });
+  setTimeout(() => setShared("projects.lock", null), 600);
+  const started = Date.now();
+  await build(project(dir), dir, "Demo");
+  assert.ok(Date.now() - started >= 500, "waited for the other copy");
+  assert.equal(shared("projects.lock"), null);
+});
+test("buildWorkspace records the folder it is opening in projects.opening before space.new", async () => {
+  const dir = repo();
+  setShared("projects.opening", { "/old": Date.now() - 6 * 60000, "/recent": Date.now() - 1000 });
+  const started = Date.now();
+  await build(project(dir), dir, "Demo");
+  const opening = shared("projects.opening");
+  assert.ok(opening[dir] >= started && opening[dir] <= Date.now(), JSON.stringify(opening));
+  assert.equal("/old" in opening, false, "entries older than 5 min are pruned");
+  assert.ok("/recent" in opening);
+});
+
+const existingSpace = (dir) => { state.spaces.push({ id: "spX", name: "S", folder: dir, machine: null }); state.terminals.push({ address: "tX", cwd: dir, state: "live", status: null }); };
+const existing = (dir, agent) => ({ space: "spX", tab: "tbX", pane: "paneX", terminal: "tX", folder: dir, agent });
+
+test("existing shell space, after timing: the chain-then-agent line is typed into the shell once it is in front, no space.new", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }, { type: "shell", direction: "down" }] }, { name: "git", command: "lazygit" }] } });
+  existingSpace(dir);
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "after", chain: "true", log: () => {}, existing: existing(dir, false) });
+  assert.equal(state.runs.some((r) => r.command === "space.new"), false);
+  const sent = state.sent.find((s) => s.terminal === "tX");
+  assert.match(sent.text, /^true && cd '.*' && exec 'claude' \|\| exec "\$SHELL"$/);
+  assert.equal(state.splits[0].pane, "paneX");
+  assert.deepEqual(state.tabsMade.map((t) => [t.space, t.name]), [["spX", "git"]]);
+  assert.equal(state.hcRuns.length, 0, "the chain runs in the agent's pane, not a setup terminal");
+  assert.deepEqual(state.runs.filter((r) => r.command === "pane.focus").map((r) => r.args), [{ pane: "paneX" }]);
+  assert.equal(shared("projects.opening"), undefined, "the opening marker is only for space.new");
+});
+test("existing shell space, with timing: exec agent is typed and the chain goes to the setup terminal", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "bash";
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  existingSpace(dir);
+  const notes = [];
+  await W.buildWorkspace({ project: p, folder: dir, name: "ignored", tabs: p.startup.tabs, prompt: "", agentTiming: "with", chain: "true", log: (m) => notes.push(m), existing: existing(dir, false) });
+  assert.equal(spaceNews().length, 0);
+  assert.deepEqual(state.sent, [{ terminal: "tX", text: "exec 'claude'" }]);
+  const setup = state.hcRuns.find((r) => r.args.includes("herdr.space=spX"));
+  assert.ok(setup, JSON.stringify(state.hcRuns));
+  assert.match(setup.args.at(-1), /^true \|\| exec "\$SHELL"$/);
+  assert.ok(notes.includes("setup runs in the setup tab"), notes.join(" | "));
+});
+test("existing shell space: a command pane types its command, a shell pane types nothing", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  const mk = (pane) => normalize({ name: "S", path: dir, startup: { tabs: [{ name: "t", panes: [pane] }] } });
+  existingSpace(dir);
+  const cmd = mk({ type: "command", command: "npm run dev" });
+  await W.buildWorkspace({ project: cmd, folder: dir, name: "S", tabs: cmd.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, false) });
+  assert.deepEqual(state.sent, [{ terminal: "tX", text: "npm run dev" }]);
+  reset(); state.foreground = "zsh"; existingSpace(dir);
+  const sh = mk({ type: "shell" });
+  await W.buildWorkspace({ project: sh, folder: dir, name: "S", tabs: sh.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, false) });
+  assert.deepEqual(state.sent, []);
+  assert.equal(spaceNews().length, 0);
+});
+test("existing agent space: nothing is typed, timing is forced with, the plan's agent pane elsewhere becomes a shell", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "term", panes: [{ type: "shell" }] }, { name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  existingSpace(dir);
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "after", chain: "true", log: () => {}, existing: existing(dir, true) });
+  assert.equal(spaceNews().length, 0);
+  assert.deepEqual(state.sent, []);
+  assert.ok(state.hcRuns.some((r) => r.args.includes("herdr.space=spX")), "the chain runs in a setup terminal");
+  assert.deepEqual(state.tabsMade.map((t) => [t.name, t.argv]), [["agent", undefined]]);
+  assert.deepEqual(state.runs.filter((r) => r.command === "pane.focus").map((r) => r.args), [{ pane: "paneX" }]);
+});
+test("existing agent space with the agent at the first pane: nothing typed, the rest still splits", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "zsh";
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }, { type: "command", command: "yazi .", direction: "right" }] }] } });
+  existingSpace(dir);
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "after", chain: "", log: () => {}, existing: existing(dir, true) });
+  assert.deepEqual(state.sent, []);
+  assert.deepEqual([state.splits[0].pane, state.splits[0].argv.slice(-3)], ["paneX", ["sh", "-c", "yazi ."]]);
+});
+test("existing shell space whose shell never comes to the front: the line is skipped and logged, the rest still builds", async () => {
+  const dir = realpathSync(makeRepo()); state.foreground = "claude";
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }, { type: "shell", direction: "down" }] }] } });
+  existingSpace(dir);
+  const errors = []; const origError = console.error; console.error = (m) => errors.push(String(m));
+  try {
+    await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", log: () => {}, existing: existing(dir, false) });
+  } finally { console.error = origError; }
+  assert.deepEqual(state.sent, []);
+  assert.equal(state.splits.length, 1);
+  assert.equal(state.splits[0].pane, "paneX");
+  assert.ok(errors.some((e) => /couldn't type into the new space's shell/.test(e)), errors.join(" | "));
 });
