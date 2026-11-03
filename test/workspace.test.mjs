@@ -1,7 +1,7 @@
 import "./helpers/setup.mjs";
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { makeRepo, scratch } from "./helpers/repo.mjs";
 
@@ -228,4 +228,53 @@ test("when the new space can't be found, the later tabs are skipped rather than 
   await build(project(dir, { startup: { agent: "claude", tabs: ["npm test", "lazygit"] } }), dir, "Demo");
   assert.equal(spaceNews().length, 1);
   assert.deepEqual(state.tabsMade, []);
+});
+
+test("after timing: the agent pane runs the chain and execs the agent with its arg prompt; no task is passed", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude", args: "--model opus" }] }] } });
+  const notes = [];
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "fix it", agentTiming: "after", chain: `cd '${dir}' && npm ci`, log: (m) => notes.push(m) });
+  const sn = state.runs.find((r) => r.command === "space.new").args;
+  assert.deepEqual(sn.argv.slice(0, 2), ["sh", "-c"]);
+  assert.match(sn.argv[2], /npm ci && exec 'claude' '--model' 'opus' 'fix it' \|\| exec "\$SHELL"$/);
+  assert.equal(sn.task, undefined);
+  assert.ok(notes.includes("setup continues in the agent pane"));
+  assert.equal(state.hcRuns.length, 0);
+});
+test("after timing with a send prompt starts the detached helper and does not wait or send", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "hermes", promptMode: "send" }] }] } });
+  state.agentStatus = "working";
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "go", agentTiming: "after", chain: "true", log: () => {} });
+  assert.equal(state.sent.length, 0);
+  const run = state.hcRuns[0].args;
+  assert.ok(run.includes("--bg") && run.some((a) => a.endsWith("bin/send-prompt.sh")), run.join(" "));
+  const file = run[run.length - 1];
+  assert.equal(readFileSync(file, "utf8"), "go");
+});
+test("with timing runs the chain in a setup terminal beside the agent, which starts at once", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  const notes = [];
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "hi", agentTiming: "with", chain: "true", log: (m) => notes.push(m) });
+  const sn = state.runs.find((r) => r.command === "space.new").args;
+  assert.deepEqual([sn.argv, sn.task], [["claude"], "hi"]);
+  assert.ok(notes.includes("setup runs in the setup tab"));
+  // One of the two spike mechanisms: a labeled hc run, or a tab.new named setup; either way the chain ends in a shell fallback.
+  const viaHc = state.hcRuns.find((r) => r.args.includes("run") && r.args.some((a) => a.startsWith("herdr.space=")));
+  const viaTab = state.tabsMade.find((t) => t.name === "setup");
+  const line = viaHc ? viaHc.args.at(-1) : viaTab?.argv?.[2];
+  assert.match(line ?? "", /^true \|\| exec "\$SHELL"$/);
+});
+test("after timing with no chain behaves like with; no agent with a chain runs it in the setup terminal", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }] } });
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "after", chain: "", log: () => {} });
+  assert.deepEqual(state.runs.find((r) => r.command === "space.new").args.argv, ["claude"]);
+  reset();
+  const q = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "s" }] } });
+  const notes = [];
+  await W.buildWorkspace({ project: q, folder: dir, name: "S", tabs: q.startup.tabs, prompt: "", agentTiming: "after", chain: "true", log: (m) => notes.push(m) });
+  assert.ok(notes.includes("setup runs in the setup tab"));
 });

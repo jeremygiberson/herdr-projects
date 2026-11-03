@@ -30,10 +30,12 @@ export const state = {
   splitFails: false,
   tabsMade: [],         // every `herdr-app do tab.new`
   appLsHidesSpaces: false, // `herdr-app ls` lists no spaces (a new space is never found)
+  hcRuns: [],           // every `hc run …`
+  renames: [],          // every `herdr-app do tab.rename`
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, closed: 0, platform: "linux", picked: null });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], renames: [], closed: 0, platform: "linux", picked: null });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -58,6 +60,10 @@ export function exec(command, args = [], options = {}) {
       state.tabsMade.push(a);
       state.terminals.push({ address: `t-tab-${n}`, cwd: a.folder, state: "live", status: state.agentStatus, argv: a.argv ?? [] });
       return Promise.resolve({ code: 0, stdout: JSON.stringify({ space: a.space, tab: `tab-${n}`, terminal: `t-tab-${n}` }), stderr: "" });
+    }
+    if (name === "tab.rename") {
+      state.renames.push(a);
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ ok: true }), stderr: "" });
     }
     if (state.splitFails) return Promise.resolve({ code: 1, stdout: JSON.stringify({ error: "no such pane" }), stderr: "" });
     state.splits.push({ command: name, ...a });
@@ -107,6 +113,10 @@ function hcNow(args) {
   if (cmd === "send") {
     state.sent.push({ terminal: rest[0], text: rest[1] });
     return state.sendFails ? { code: 1, stdout: "", stderr: "send failed\nmore" } : ok("{}");
+  }
+  if (cmd === "run") {
+    state.hcRuns.push({ args });
+    return ok(JSON.stringify({ address: `t-run-${state.hcRuns.length}` }));
   }
   return { code: 1, stdout: "", stderr: `unsupported: ${cmd}` };
 }

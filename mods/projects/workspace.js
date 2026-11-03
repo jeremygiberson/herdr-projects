@@ -1,7 +1,7 @@
 // Everything that creates spaces, tabs and panes: a project's tabs become app commands here and nowhere else.
-import { exec, hc, run, spaces, home } from "herdr";
+import { exec, hc, run, spaces, home, appHome, writeTextFile } from "herdr";
 import { log as diag } from "./log.js";
-import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder } from "./lib.js";
+import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder, chainThenAgent, chainAlone } from "./lib.js";
 import { folderExists, findSpace, projectFolder } from "./git.js";
 
 const sleep = (s) => exec("sleep", [String(s)]);
@@ -115,10 +115,30 @@ async function appDo(command, args, what) {
   return made;
 }
 
+/** Runs the setup chain in its own tab of `space` (a labeled `hc run`, which herdr shows as a tab there),
+ *  named "setup"; the tab closes when the chain succeeds and stays at a shell when it fails. */
+async function startSetupTerminal(space, folder, chain) {
+  const tabId = `setup-${Date.now()}`;
+  const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--cwd", folder, "--label", "herdr.space=" + space, "--label", "herdr.tab=" + tabId, "--", "sh", "-c", chainAlone(chain)]);
+  if (r.code !== 0) return diag("error", `couldn't start the setup terminal: ${r.stderr.split("\n")[0]}`, { space, folder });
+  await appDo("tab.rename", { id: tabId, name: "setup" }, "the setup tab");
+}
+
+/** Hands a send-mode prompt to a detached helper that types it once the agent (behind its setup chain) is ready. */
+async function startPromptHelper(terminal, prompt) {
+  if (!terminal) return diag("error", "prompt not sent: couldn't find the new terminal");
+  const file = `${appHome()}/data/projects/prompt-${Date.now()}.txt`;
+  try { await writeTextFile(file, prompt, null); } catch (e) { return diag("error", `prompt not sent: ${e.message}`, { file }); }
+  const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--", "sh", `${appHome()}/mods/projects/bin/send-prompt.sh`, terminal, file]);
+  if (r.code !== 0) diag("error", `couldn't start the prompt helper: ${r.stderr.split("\n")[0]}`, { terminal });
+}
+
 /** Opens `folder` as a space with the project's tabs, each tab's panes split as planned, and starts the first agent
  *  (with `prompt`, which no other pane gets). Throws before creating anything when the tabs can't be built or a folder is missing.
+ *  `chain` (the setup commands, or "") runs before the agent in its own pane when `agentTiming` is "after",
+ *  or beside it in a setup tab when "with" (or when there is no agent).
  *  Returns the new space and the first agent's terminal when it is known. */
-export async function buildWorkspace({ project, folder, name, tabs, prompt, log }) {
+export async function buildWorkspace({ project, folder, name, tabs, prompt, agentTiming = "with", chain = "", log }) {
   const plan = tabPlan(tabs);
   const env = await readEnv();
 
@@ -140,12 +160,15 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, log 
   // that read a positional argument as a subcommand).
   const send = Boolean(prompt && leadArgv.length && lead.pane.promptMode === "send");
   const arg = Boolean(prompt && leadArgv.length && !send);
+  // "after": the lead pane runs the chain and then execs into the agent; otherwise the chain gets a setup tab.
+  const after = Boolean(chain && leadArgv.length && agentTiming === "after");
   const isFirst = (ti, pi) => ti === 0 && pi === 0;
   const isLead = (ti, pi) => lead?.tab === ti && lead?.index === pi;
   const argvOf = (ti, pi) => {
     const pane = plan[ti].panes[pi];
     if (pane.type === "command") return ["sh", "-c", pane.command];
     const argv = agentArgv(pane);
+    if (after && isLead(ti, pi)) return ["sh", "-c", chainThenAgent(chain, argv, arg ? prompt : "")];
     return argv.length && arg && isLead(ti, pi) && !isFirst(ti, pi) ? [...argv, prompt] : argv;
   };
 
@@ -177,7 +200,7 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, log 
     diag("debug", "launch", { folder, name, argv: firstArgv, tabs: plan.length });
     run("space.new", {
       name, folder: dirs[0][0], tab: plan[0].name,
-      ...(firstArgv.length ? { argv: firstArgv, ...(arg && isLead(0, 0) ? { task: prompt } : {}) } : {}),
+      ...(firstArgv.length ? { argv: firstArgv, ...(arg && !after && isLead(0, 0) ? { task: prompt } : {}) } : {}),
     });
     // focused() can still be the window the picker was opened from just after space.new, so the new
     // space and its first pane come from `herdr-app ls`: the space that wasn't there before.
@@ -215,6 +238,13 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, log 
     return { space, agentTerminal, focusPane: agentPane ?? paneIds[0] ?? null };
   });
   if (focusPane) run("pane.focus", { pane: focusPane });
-  if (send) await sendWhenReady(agentTerminal, dirs[lead.tab][lead.index], prompt);
+  if (after) log("setup continues in the agent pane");
+  else if (chain) {
+    if (space) await startSetupTerminal(space, folder, chain);
+    else diag("error", "setup not run: couldn't find the new space", { folder });
+    log("setup runs in the setup tab");
+  }
+  if (send && after) await startPromptHelper(agentTerminal, prompt);
+  else if (send) await sendWhenReady(agentTerminal, dirs[lead.tab][lead.index], prompt);
   return { space, agentTerminal };
 }
