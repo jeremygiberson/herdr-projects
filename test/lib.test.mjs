@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary } from "../mods/projects/lib.js";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { scratch } from "./helpers/repo.mjs";
 
 test("fuzzy matches subsequences and ranks tighter matches higher", () => {
   assert.equal(fuzzy("zzz", "herdr"), -1);
@@ -94,7 +98,7 @@ test("shortHome only shortens real home prefixes", () => {
 });
 
 test("joinList and splitList round-trip", () => {
-  assert.equal(joinList(["a", "b"]), "a ;; b");
+  assert.equal(joinList(["a", "b"]), "a\nb");
   assert.equal(joinList(undefined), "");
   assert.deepEqual(splitList(joinList(["npm ci", "cp a b"])), ["npm ci", "cp a b"]);
 });
@@ -108,7 +112,7 @@ test("blankProject and normalize", () => {
   assert.equal(b.name, "api");
   assert.equal(b.worktree.mode, "ask");
   assert.deepEqual(b.startup.setup, []);
-  assert.deepEqual(b.startup, { setup: [], agentTiming: "after", tabs: [] });
+  assert.deepEqual(b.startup, { setup: [], quickSetup: false, agentTiming: "after", tabs: [] });
   assert.equal(b.description, "");
   const n = normalize({ name: "x", startup: { agent: "claude" } });
   assert.equal(n.startup.tabs[0].panes[0].agent, "claude");
@@ -562,4 +566,45 @@ test("normalize drops a tab's command when it has panes", () => {
 
 test("normalize treats a startup that is not an object as absent", () => {
   for (const startup of ["claude", 3, null]) assert.equal(normalize({ path: "/a", startup }).startup.tabs[0].name, "shell");
+});
+
+test("normalize fills copy, worktree setup, quickSetup and quickLaunch, dropping blank lines", () => {
+  const p = normalize({ path: "/a", worktree: { copy: [" .env ", "", ".claude/*"], setup: ["npm ci", "  "] } });
+  assert.deepEqual([p.worktree.copy, p.worktree.setup, p.startup.quickSetup, p.quickLaunch], [[".env", ".claude/*"], ["npm ci"], false, false]);
+  assert.deepEqual(normalize(p), p);
+});
+test("splitList takes ;; or newlines; joinList writes lines", () => {
+  assert.deepEqual(splitList("a ;; b\nc\n\n"), ["a", "b", "c"]);
+  assert.equal(joinList(["a", "b"]), "a\nb");
+});
+test("shq single-quotes a word, escaping embedded quotes", () => {
+  assert.equal(shq("it's"), "'it'\\''s'");
+  assert.equal(shq(""), "''");
+});
+test("setupVars gives braces and env in a fixed order", () => {
+  const { vars, env } = setupVars({ main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" });
+  assert.deepEqual(vars, { main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" });
+  assert.deepEqual(Object.keys(env), ["PROJECTS_MAIN", "PROJECTS_FOLDER", "PROJECTS_BRANCH", "PROJECTS_REPO", "PROJECTS_NAME", "PROJECTS_HOME"]);
+});
+test("setupChain exports env, cds, runs steps verbatim with braces expanded, and touches the marker", () => {
+  const { vars, env } = setupVars({ main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" });
+  const c = setupChain({ steps: ["cp {main}/.env .env", "echo 'it''s $HOME' && true"], vars, env, folder: "/w", marker: "/w/.projects-setup-done" });
+  assert.equal(c, "export PROJECTS_MAIN='/m'; export PROJECTS_FOLDER='/w'; export PROJECTS_BRANCH='b'; export PROJECTS_REPO='r'; export PROJECTS_NAME='N'; export PROJECTS_HOME='/h'; cd '/w' && cp /m/.env .env && echo 'it''s $HOME' && true && touch '/w/.projects-setup-done'");
+  assert.equal(setupChain({ steps: [], vars, env, folder: "/w" }), "");
+  assert.ok(!setupChain({ steps: ["x"], vars, env, folder: "/w" }).includes("touch"));
+});
+test("setupChain runs in a real shell with env and braces", () => {
+  const dir = scratch();
+  const { vars, env } = setupVars({ main: "/m", folder: dir, branch: "b", repo: "r", name: "N", home: "/h" });
+  execFileSync("sh", ["-c", setupChain({ steps: ["printf '%s' \"$PROJECTS_NAME-{branch}\" > out.txt"], vars, env, folder: dir })], { encoding: "utf8" });
+  assert.equal(readFileSync(join(dir, "out.txt"), "utf8"), "N-b");
+});
+test("chainThenAgent execs the quoted agent with the prompt and falls back to a shell; chainAlone only falls back", () => {
+  assert.equal(chainThenAgent("cd '/w' && npm ci", ["claude", "--model", "opus"], "fix it's"), "cd '/w' && npm ci && exec 'claude' '--model' 'opus' 'fix it'\\''s' || exec \"$SHELL\"");
+  assert.equal(chainThenAgent("", ["claude"], "x"), "");
+  assert.equal(chainAlone("cd '/w' && npm ci"), "cd '/w' && npm ci || exec \"$SHELL\"");
+});
+test("setupSummary counts copy and setup and names the timing", () => {
+  assert.equal(setupSummary(normalize({ path: "/a", worktree: { copy: [".env"], setup: ["npm ci", "npm run build"] }, startup: { setup: ["docker compose up -d"], agentTiming: "after" } })), "1 copy · 3 setup · agent after setup");
+  assert.equal(setupSummary(normalize({ path: "/a", startup: { agentTiming: "with" } })), "no setup");
 });

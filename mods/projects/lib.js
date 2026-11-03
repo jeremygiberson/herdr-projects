@@ -98,9 +98,9 @@ export function shortHome(p, home) {
   return p === home || p.startsWith(home + "/") ? "~" + p.slice(home.length) : p;
 }
 
-/** "a ;; b" to ["a", "b"]. */
-export const splitList = (text) => String(text ?? "").split(";;").map((x) => x.trim()).filter(Boolean);
-export const joinList = (list) => (list ?? []).join(" ;; ");
+/** "a ;; b" or "a\nb" to ["a", "b"]. */
+export const splitList = (text) => String(text ?? "").split(/;;|\r?\n/).map((x) => x.trim()).filter(Boolean);
+export const joinList = (list) => (list ?? []).join("\n");
 
 /** Shell-style words: whitespace separated, with '…' and "…" keeping spaces together. */
 export function splitArgs(text) {
@@ -123,9 +123,12 @@ export function blankProject(path = "") {
       root: "~/.herdr/worktrees/{repo}/{branch}",
       spaceName: "{name} · {branch}",
       repoSpace: false,
+      copy: [],
+      setup: [],
     },
     git: { fetch: true, remote: "origin", base: "main", fastForward: false },
-    startup: { setup: [], agentTiming: "after", tabs: [] },
+    startup: { setup: [], quickSetup: false, agentTiming: "after", tabs: [] },
+    quickLaunch: false,
   };
 }
 
@@ -144,6 +147,9 @@ const fillTab = (t) => {
   const panes = Array.isArray(t?.panes) ? t.panes.map(fillPane) : [];
   return { ...t, name: t?.name ?? "", folder: t?.folder ?? "", command: panes.length ? "" : t?.command ?? "", panes };
 };
+
+// A list of strings, trimmed, blanks dropped.
+const cleanList = (x) => (Array.isArray(x) ? x : []).map((s) => String(s).trim()).filter(Boolean);
 
 const LEGACY_STARTUP_KEYS = ["agent", "args", "prompt", "promptMode", "layout"];
 
@@ -171,12 +177,18 @@ export function normalize(p, layouts = []) {
   for (const k of LEGACY_STARTUP_KEYS) delete startup[k];
   startup.tabs = legacy ? upgradeStartup(su, Array.isArray(layouts) ? layouts : []) : (Array.isArray(su.tabs) ? su.tabs : []).map(fillTab);
   if (!startup.tabs.length) startup.tabs = [fillTab({ name: "shell" })];
+  startup.setup = cleanList(startup.setup);
+  startup.quickSetup = Boolean(startup.quickSetup);
+  const worktree = { ...b.worktree, ...(p?.worktree ?? {}) };
+  worktree.copy = cleanList(worktree.copy);
+  worktree.setup = cleanList(worktree.setup);
   return {
     ...b,
     ...p,
-    worktree: { ...b.worktree, ...(p?.worktree ?? {}) },
+    worktree,
     git: { ...b.git, ...(p?.git ?? {}) },
     startup,
+    quickLaunch: Boolean(p?.quickLaunch),
   };
 }
 
@@ -305,6 +317,43 @@ export function nextLayout(names, current) {
 export const inFolder = (folder, argv = []) => [
   "sh", "-c", 'cd "$1" || exit; shift; [ $# -gt 0 ] || set -- "${SHELL:-/bin/sh}"; exec "$@"', "sh", folder, ...argv,
 ];
+
+// ---- setup -----------------------------------------------------------------------------------
+
+/** A single-quoted shell word; an embedded ' becomes '\\''. */
+export const shq = (s) => `'${String(s ?? "").replace(/'/g, `'\\''`)}'`;
+
+/** The values a setup step can use: `vars` for {braces}, `env` for $PROJECTS_* in the shell. */
+export function setupVars({ main, folder, branch, repo, name, home }) {
+  return {
+    vars: { main, folder, branch, repo, name, home },
+    env: { PROJECTS_MAIN: main, PROJECTS_FOLDER: folder, PROJECTS_BRANCH: branch, PROJECTS_REPO: repo, PROJECTS_NAME: name, PROJECTS_HOME: home },
+  };
+}
+
+/** One shell line: export the env, cd to `folder`, run each step (braces expanded, otherwise verbatim), touch `marker`
+ *  when given. "" when there are no steps. */
+export function setupChain({ steps, vars, env, folder, marker }) {
+  if (!(steps ?? []).length) return "";
+  const exports = Object.entries(env ?? {}).map(([k, v]) => `export ${k}=${shq(v)}`);
+  const chain = [`cd ${shq(folder)}`, ...steps.map((x) => expand(x, vars)), ...(marker ? [`touch ${shq(marker)}`] : [])].join(" && ");
+  return [...exports, chain].join("; ");
+}
+
+/** The chain, then the agent in place of the shell; any failure leaves a shell open. "" without a chain. */
+export const chainThenAgent = (chain, argv, prompt) =>
+  chain ? `${chain} && exec ${argv.map(shq).join(" ")}${prompt ? " " + shq(prompt) : ""} || exec "$SHELL"` : "";
+
+/** The chain alone; a shell takes over when it ends or fails. */
+export const chainAlone = (chain) => `${chain} || exec "$SHELL"`;
+
+/** "2 copy · 3 setup · agent after setup", or "no setup". */
+export function setupSummary(project) {
+  const copy = project.worktree.copy.length;
+  const setup = project.worktree.setup.length + project.startup.setup.length;
+  if (!copy && !setup) return "no setup";
+  return [copy && `${copy} copy`, setup && `${setup} setup`, `agent ${project.startup.agentTiming} setup`].filter(Boolean).join(" · ");
+}
 
 // ---- agent options ----------------------------------------------------------------------------
 
