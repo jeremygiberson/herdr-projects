@@ -129,19 +129,6 @@ export async function prepareMain(project, log) {
   log(r.code === 0 ? `fast-forwarded ${g.base}` : "not fast-forwarding: local commits");
 }
 
-/** Setup commands, one after another, stopping at the first failure. exec has a 30 s limit each. */
-export async function runSetup(project, folder, log) {
-  for (const cmd of project.startup.setup) {
-    log(`$ ${cmd}`);
-    try {
-      const r = await exec("sh", ["-c", cmd], { cwd: folder });
-      if (r.code !== 0) return log(`setup failed (${r.code}): ${cmd}`);
-    } catch {
-      return log(`setup stopped (timed out or couldn't start): ${cmd}`);
-    }
-  }
-}
-
 /** The folder with symlinks resolved, or itself when it can't be (gone, unreadable). */
 async function realPath(p) {
   try {

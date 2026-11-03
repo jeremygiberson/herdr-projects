@@ -5,13 +5,14 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
-import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome } from "herdr";
+import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec } from "herdr";
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
-import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, runSetup, findSpace, gitSummary, folderExists } from "./git.js";
+import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
 import { buildWorkspace } from "./workspace.js";
+import { copyInto, isNewWorktree, markerPath, excludeMarker } from "./setup.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupVars, setupChain, expand } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -413,7 +414,7 @@ export default class ProjectPresets extends View {
     this.target = r.p;
     const mode = mainOnly ? "never" : r.p.worktree.mode;
     if (mode === "ask") return this.askName(r.p);
-    this.start(r.p, mode === "always");
+    this.start(r.p, { worktree: mode === "always" });
   }
 
   askName(p) {
@@ -421,7 +422,7 @@ export default class ProjectPresets extends View {
     this.preview = "";
     this.nameInput = InputState.new({ placeholder: "branch name, e.g. fix login (empty: use the time)" });
     this.nameInput.on("change", (_e, cx) => this.refreshPreview(cx));
-    this.nameInput.on("submit", () => this.start(p, true, this.nameInput.value()));
+    this.nameInput.on("submit", () => this.start(p, { worktree: true, branchText: this.nameInput.value() }));
     this.nameInput.focus();
     this.refreshPreview(this.cx);
   }
@@ -446,38 +447,30 @@ export default class ProjectPresets extends View {
     cx?.notify();
   }
 
-  start(p, worktree, slugText = "") {
+  start(p, { worktree, branchText = "", prompt = firstAgent(p.startup.tabs)?.pane?.prompt ?? "", agentTiming = p.startup.agentTiming, pick = this.layoutNameFor(p) } = {}) {
     this.mode = "busy";
     this.notes = [];
     this.error = null;
     const log = (m) => { this.notes = [...this.notes, m]; this.cx?.notify(); };
     this.cx?.spawn(async (cx) => {
       try {
-        const pick = this.layoutNameFor(p);
         if (pick && !this.layouts.some((l) => l.name === pick)) throw new Error(`No layout called "${pick}". Layouts: ${this.layouts.map((l) => l.name).join(", ") || "none"}`);
         const tabs = tabsForLaunch(p, this.layouts, pick);
         tabPlan(tabs); // a broken layout is reported before anything is created
-        let folder = projectFolder(p);
-        let name = p.name;
         const existing = findSpace(p);
-        if (worktree) {
-          const wt = await createWorktree(p, slugText, log);
-          folder = wt.folder;
-          name = worktreeSpaceName(p, wt);
-          await runSetup(p, folder, log);
-        } else if (existing) {
+        if (!worktree && existing) {
           setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
           this.dismiss();
           return run("space.select", { id: existing.id });
-        } else {
-          await prepareMain(p, log);
-          await runSetup(p, folder, log);
         }
+        const { folder, name, chain, steps } = await this.prepareLaunch(p, { worktree, branchText }, log);
+        const quick = p.startup.quickSetup;
+        if (quick) await runInline(steps, folder, log);
         setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
         const first = firstAgent(p.startup.tabs)?.pane;
-        if (first?.prompt && first.promptMode === "send") log("Waiting for the agent to be ready for its prompt…");
+        if (prompt && first?.promptMode === "send" && agentTiming === "with") log("Waiting for the agent to be ready for its prompt…");
         // Stay open until the prompt is sent: closing the popup cancels this task.
-        await buildWorkspace({ project: p, folder, name, tabs, prompt: first?.prompt ?? "", log });
+        await buildWorkspace({ project: p, folder, name, tabs, prompt, agentTiming, chain: quick ? "" : chain, log });
         this.dismiss();
       } catch (e) {
         logError("open project", e);
@@ -485,6 +478,29 @@ export default class ProjectPresets extends View {
         cx.notify();
       }
     });
+  }
+
+  /** The worktree (created, copied into, chained) or the prepared checkout: { folder, name, chain, steps }. */
+  async prepareLaunch(p, { worktree, branchText }, log) {
+    const main = projectFolder(p), quick = p.startup.quickSetup;
+    const note = (steps) => { if (!quick) steps.forEach((s) => log(`$ ${s}`)); };
+    if (!worktree) {
+      await prepareMain(p, log);
+      const { vars, env } = setupVars({ main, folder: main, branch: (await inspect(main)).branch, repo: basename(main), name: p.name, home: home() });
+      const steps = p.startup.setup.map((s) => expand(s, vars));
+      note(p.startup.setup);
+      return { folder: main, name: p.name, steps, chain: setupChain({ steps: p.startup.setup, vars, env, folder: main }) };
+    }
+    const wt = await createWorktree(p, branchText, log);
+    const isNew = await isNewWorktree(wt.folder);
+    const { vars, env } = setupVars({ main, folder: wt.folder, branch: wt.branch, repo: wt.vars.repo, name: p.name, home: home() });
+    if (isNew && p.worktree.copy.length) await copyInto({ main, dest: wt.folder, patterns: p.worktree.copy, vars, log });
+    const raw = (isNew ? p.worktree.setup : []).concat(p.startup.setup);
+    const marker = isNew && raw.length && !quick ? markerPath(wt.folder) : undefined;
+    const chain = setupChain({ steps: raw, vars, env, folder: wt.folder, marker });
+    if (marker) await excludeMarker(wt.folder);
+    note(raw);
+    return { folder: wt.folder, name: worktreeSpaceName(p, wt), steps: raw.map((s) => expand(s, vars)), chain };
   }
 
   // ---- editor -----------------------------------------------------------
@@ -1414,5 +1430,18 @@ export default class ProjectPresets extends View {
         .child(div().flex_1())
         .child(this.button(t, "pp-cancel", "Cancel", false, () => { this.mode = "list"; this.error = null; this.search.focus(); cx.notify(); }))
         .child(this.button(t, "pp-save", "Save", true, () => this.save(cx))));
+  }
+}
+
+/** Quick setup: the steps one after another in `folder`, stopping at the first failure. exec has a 30 s limit each. */
+async function runInline(steps, folder, log) {
+  for (const step of steps) {
+    log(`$ ${step}`);
+    try {
+      const r = await exec("sh", ["-c", step], { cwd: folder });
+      if (r.code !== 0) return log(`setup failed (${r.code}): ${step}`);
+    } catch {
+      return log(`setup stopped (timed out or couldn't start): ${step}`);
+    }
   }
 }

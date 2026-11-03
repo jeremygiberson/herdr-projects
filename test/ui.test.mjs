@@ -1565,3 +1565,41 @@ test("a demo file can launch the named project", async () => {
   v.applyDemo({ view: "launch", project: "shop" }); await cx.settle();
   assert.deepEqual(state.tabsMade.map((t) => t.name), ["web"]);
 });
+
+const excludeFile = (wt) => { const p = sh(wt, "rev-parse", "--git-path", "info/exclude"); return p.startsWith("/") ? p : join(wt, p); };
+test("opening a new worktree copies the listed files, runs worktree and startup setup once, and marks the worktree", async () => {
+  const dir = realpathSync(makeRepo()); writeFileSync(join(dir, ".env"), "A=1\n");
+  const root = scratch("pp-wt");
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "always", copy: [".env"], setup: ["npm ci"], branchTemplate: "{slug}", root: `${root}/{branch}` }, startup: { setup: ["echo hi"], agentTiming: "after", ...AG("claude") } })]);
+  enter(v); await cx.settle();
+  const wt = state.runs.find((r) => r.command === "space.new").args.folder;
+  assert.equal(readFileSync(join(wt, ".env"), "utf8"), "A=1\n");
+  const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
+  assert.match(line, /npm ci && echo hi && touch '.*\.projects-setup-done' && exec 'claude'/);
+  assert.match(readFileSync(excludeFile(wt), "utf8"), /projects-setup-done/);
+  assert.ok(v.notes.some((n) => /copied 1 file/.test(n)));
+});
+test("a worktree that already carries the marker gets only the startup setup: no copy, no worktree setup, no touch", async () => {
+  const dir = realpathSync(makeRepo()); const wt = join(scratch("pp-wt"), "w"); sh(dir, "worktree", "add", "-q", wt, "-b", "w");
+  writeFileSync(join(wt, ".projects-setup-done"), ""); writeFileSync(join(dir, ".env"), "A=1\n");
+  const { v, cx } = await open([proj("wt", wt, { worktree: { mode: "never", copy: [".env"], setup: ["echo X"] }, startup: { setup: ["echo Y"], agentTiming: "after", ...AG("claude") } })]);
+  enter(v); await cx.settle();
+  const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
+  assert.match(line, /echo Y && exec/); assert.doesNotMatch(line, /echo X|touch/);
+  assert.equal(existsSync(join(wt, ".env")), false);
+});
+test("quickSetup runs the steps inline before the agent and passes no chain", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "never" }, startup: { setup: ["touch ran.txt"], quickSetup: true, agentTiming: "after", ...AG("claude") } })]);
+  enter(v); await cx.settle();
+  assert.equal(existsSync(join(dir, "ran.txt")), true);
+  assert.deepEqual(state.runs.find((r) => r.command === "space.new").args.argv, ["claude"]);
+  assert.ok(v.notes.some((n) => n === "$ touch ran.txt"));
+});
+test("a slash in the branch box is used verbatim", async () => {
+  const dir = realpathSync(makeRepo()); const root = scratch("pp-wt");
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "ask", root: `${root}/{branch}` }, startup: AG("claude") })]);
+  enter(v); await cx.settle();
+  v.nameInput.set_value("feat/x"); enter(v); await cx.settle();
+  assert.match(state.runs.find((r) => r.command === "space.new").args.name, /feat\/x/);
+});

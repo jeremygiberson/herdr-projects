@@ -201,31 +201,6 @@ test("prepareMain leaves other branches, dirty trees and diverged history alone"
   assert.ok(!existsSync(join(dir, "new.txt")));
 });
 
-// ---------------------------------------------------------------- runSetup
-
-test("runSetup runs commands in order in the folder", async () => {
-  const dir = scratch();
-  const p = normalize({ startup: { setup: ["echo one > out.txt", "echo two >> out.txt"] } });
-  await G.runSetup(p, dir, note);
-  const { readFileSync } = await import("node:fs");
-  assert.equal(readFileSync(join(dir, "out.txt"), "utf8"), "one\ntwo\n");
-});
-
-test("runSetup stops at the first failure", async () => {
-  const dir = scratch();
-  msgs.length = 0;
-  const p = normalize({ startup: { setup: ["exit 3", "touch after.txt"] } });
-  await G.runSetup(p, dir, note);
-  assert.ok(!existsSync(join(dir, "after.txt")));
-  assert.ok(msgs.some((m) => m.startsWith("setup failed (3): exit 3")));
-});
-
-test("runSetup reports a command that cannot start", async () => {
-  msgs.length = 0;
-  await G.runSetup(normalize({ startup: { setup: ["true"] } }), "/no/such/folder", note);
-  assert.ok(msgs.some((m) => m.startsWith("setup stopped")));
-});
-
 // ---------------------------------------------------------------- findSpace, worktreeSpaceName
 
 test("findSpace matches a local space by the project's folder", () => {
