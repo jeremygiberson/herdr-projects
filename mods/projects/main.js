@@ -11,7 +11,7 @@ import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceNam
 import { buildWorkspace } from "./workspace.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -45,10 +45,10 @@ const CARD = 340; // the detail card's width
 // Editor sections and the text fields each one shows.
 const SECTIONS = [["project", "Project"], ["worktree", "Worktree"], ["git", "Git"], ["startup", "Startup"]];
 const SECTION_FIELDS = {
-  project: ["name", "path", "group"],
+  project: ["name", "path", "group", "description"],
   worktree: ["branchTemplate", "root", "spaceName"],
   git: ["remote", "base"],
-  startup: ["agent", "args", "prompt", "layout", "setup", "tabs"],
+  startup: ["setup"],
 };
 const MODES = ["ask", "always", "never"];
 const MODE_HELP = { ask: "ask for a branch name", always: "always a new worktree", never: "open the checkout" };
@@ -58,18 +58,28 @@ const TEXT = [
   ["name", "Name", (p) => p.name, (p, v) => (p.name = v)],
   ["path", "Folder", (p) => p.path, (p, v) => (p.path = v)],
   ["group", "Group", (p) => p.group, (p, v) => (p.group = v)],
+  ["description", "Description", (p) => p.description, (p, v) => (p.description = v)],
   ["branchTemplate", "Branch name", (p) => p.worktree.branchTemplate, (p, v) => (p.worktree.branchTemplate = v), "{user} {date} {slug} {repo} {project}"],
   ["root", "Worktree folder", (p) => p.worktree.root, (p, v) => (p.worktree.root = v), "{repo} {branch} plus the above"],
   ["spaceName", "Space name", (p) => p.worktree.spaceName, (p, v) => (p.worktree.spaceName = v), "the sidebar name: {name} {branch} {slug} {user} {date} {repo}"],
   ["remote", "Remote", (p) => p.git.remote, (p, v) => (p.git.remote = v)],
   ["base", "Base branch", (p) => p.git.base, (p, v) => (p.git.base = v)],
-  ["agent", "Agent command", (p) => p.startup.agent, (p, v) => (p.startup.agent = v), "pick above or type one; empty: plain shell"],
-  ["args", "Agent arguments", (p) => p.startup.args, (p, v) => (p.startup.args = v), "e.g. --model opus --permission-mode plan"],
-  ["prompt", "First prompt", (p) => p.startup.prompt, (p, v) => (p.startup.prompt = v), "sent to the agent; ignored without one"],
-  ["layout", "Pane layout", (p) => p.startup.layout, (p, v) => (p.startup.layout = v), "a layout name (empty: just the agent); ctrl+alt+L (⌘⌥L) picks one at launch"],
   ["setup", "Setup commands", (p) => joinList(p.startup.setup), (p, v) => (p.startup.setup = splitList(v)), "separate with ;; — each limited to 30 s"],
-  ["tabs", "Extra tabs", (p) => joinList(p.startup.tabs), (p, v) => (p.startup.tabs = splitList(v)), "commands, separate with ;;"],
 ];
+// The Startup section's boxes for a tab and for a pane: [field, label, note]. Each tab or pane object gets its own (see boxFor).
+const TAB_BOXES = [
+  ["name", "Name", "shown in the tab bar"],
+  ["folder", "Folder", "empty: the project's folder; relative to it, or absolute"],
+  ["command", "Command", "empty: a plain shell"],
+];
+const PANE_BOXES = [
+  ["folder", "Folder", "empty: the tab's folder"],
+  ["command", "Command", "runs in this pane"],
+  ["agent", "Agent command", "pick above or type one"],
+  ["args", "Arguments", "e.g. --model opus --permission-mode plan"],
+  ["prompt", "First prompt", "sent to the agent"],
+];
+const boxNote = (list, f) => list.find(([k]) => k === f);
 
 export default class ProjectPresets extends View {
   init(_props, cx) {
@@ -490,17 +500,26 @@ export default class ProjectPresets extends View {
     this.confirmDelete = false;
     this.fields = TEXT.map(([key, , get]) => {
       const s = InputState.new({ value: get(this.draft) ?? "" });
-      s.on("focus", () => (this.field = key));
+      s.on("focus", () => { this.field = key; this.focused = s; });
       return [key, s];
     });
+    this.inputs = new WeakMap(); // tab or pane object → { field: InputState }
+    this.tabAt = 0;
+    this.paneAt = null;
+    this.fieldOrder = [];
+    this.makeBoxes();
     this.section = "project";
+    this.focused = this.fields[0][1];
     this.fields[0][1].focus();
   }
+
+  fieldState(key) { return this.fields.find(([k]) => k === key)[1]; }
 
   showSection(id) {
     this.section = id;
     this.field = SECTION_FIELDS[id][0];
-    const state = this.fields.find(([k]) => k === this.field)[1];
+    const state = this.fieldState(this.field);
+    this.focused = state;
     this.cx.timer.after(80, () => state.focus()); // once its input is on screen
     this.cx.notify();
   }
@@ -517,8 +536,10 @@ export default class ProjectPresets extends View {
 
   async save(cx) {
     try {
+      this.collectTabs();
       for (const [key, state] of this.fields) TEXT.find(([k]) => k === key)[3](this.draft, key === "path" ? state.value() : state.value().trim());
       const d = this.draft;
+      tabPlan(d.startup.tabs);
       if (!d.name) throw new Error("Give the project a name");
       if (!d.template) {
         if (!d.path.trim()) throw new Error("Choose the project's folder: Browse… or type its path");
@@ -554,11 +575,210 @@ export default class ProjectPresets extends View {
     cx.notify();
   }
 
+  /** Tab and Shift+Tab: the next box of the section in the order the last draw showed them. */
   focusNextField(back) {
-    const keys = SECTION_FIELDS[this.section];
-    const i = keys.indexOf(this.field);
-    this.field = keys[(i + (back ? -1 : 1) + keys.length) % keys.length];
-    this.fields.find(([k]) => k === this.field)[1].focus();
+    const order = this.fieldOrder?.length ? this.fieldOrder : SECTION_FIELDS[this.section].map((k) => this.fieldState(k));
+    let i = order.indexOf(this.focused);
+    if (i < 0) i = back ? 0 : -1;
+    const next = order[(i + (back ? -1 : 1) + order.length) % order.length];
+    this.focused = next;
+    this.field = this.fields.find(([, s]) => s === next)?.[0] ?? null;
+    next.focus();
+  }
+
+  // ---- editor: the Startup section's tabs and panes -----------------------
+  // The draft's tabs and panes are edited in place; each object has its own boxes (this.inputs), which collectTabs reads
+  // back on save. Moving a tab or pane moves the object, so what was typed moves with it.
+
+  tab() { return this.draft.startup.tabs[this.tabAt]; }
+  pane() { return this.paneAt == null ? undefined : this.tab()?.panes[this.paneAt]; }
+
+  /** The box for a tab's or pane's field, made on first use. */
+  boxFor(obj, field) {
+    let boxes = this.inputs.get(obj);
+    if (!boxes) this.inputs.set(obj, (boxes = {}));
+    if (!boxes[field]) {
+      const s = InputState.new({ value: obj[field] ?? "" });
+      s.on("focus", () => { this.field = null; this.focused = s; });
+      boxes[field] = s;
+    }
+    return boxes[field];
+  }
+
+  /** Boxes for every tab and pane, made when the draft changes shape so a draw only reads them. */
+  makeBoxes() {
+    for (const tab of this.draft.startup.tabs) {
+      for (const [f] of TAB_BOXES) this.boxFor(tab, f);
+      for (const pane of tab.panes) for (const [f] of PANE_BOXES) this.boxFor(pane, f);
+    }
+  }
+
+  /** Sets a field and its box together, so collectTabs does not write the old text back. */
+  setField(obj, field, value) {
+    obj[field] = value;
+    this.inputs.get(obj)?.[field]?.set_value(value);
+  }
+
+  /** Writes every box back into its tab or pane (a folder keeps its spaces, the rest are trimmed). */
+  collectTabs() {
+    const read = (obj, list) => {
+      const boxes = this.inputs.get(obj) ?? {};
+      for (const [f] of list) if (boxes[f]) obj[f] = f === "folder" ? boxes[f].value() : boxes[f].value().trim();
+    };
+    for (const tab of this.draft.startup.tabs) {
+      read(tab, TAB_BOXES);
+      for (const pane of tab.panes) read(pane, PANE_BOXES);
+    }
+  }
+
+  selectTab(i) { this.tabAt = i; this.paneAt = null; }
+
+  addTab() {
+    const tabs = this.draft.startup.tabs;
+    tabs.push({ name: "", folder: "", command: "", panes: [] });
+    this.selectTab(tabs.length - 1);
+    this.makeBoxes();
+  }
+
+  /** Removes the selected tab and selects the one before it (none when the list is empty). */
+  removeTab() {
+    if (!this.tab()) return;
+    this.draft.startup.tabs.splice(this.tabAt, 1);
+    this.selectTab(Math.max(0, this.tabAt - 1));
+  }
+
+  moveTab(delta) {
+    const tabs = this.draft.startup.tabs;
+    const to = this.tabAt + delta;
+    if (!this.tab() || to < 0 || to >= tabs.length) return;
+    [tabs[this.tabAt], tabs[to]] = [tabs[to], tabs[this.tabAt]];
+    this.tabAt = to;
+  }
+
+  /** A shell pane split below the last one. A tab that runs a command first gets that command as pane 1. */
+  addPane() {
+    const tab = this.tab();
+    if (!tab) return;
+    const command = this.boxFor(tab, "command").value().trim();
+    if (command && !tab.panes.length) {
+      tab.panes.push(blankPane({ type: "command", command }));
+      this.setField(tab, "command", "");
+    }
+    tab.panes.push(blankPane({ direction: tab.panes.length ? "down" : "" }));
+    this.paneAt = tab.panes.length - 1;
+    this.makeBoxes();
+  }
+
+  removePane() {
+    const tab = this.tab();
+    if (!this.pane()) return;
+    tab.panes.splice(this.paneAt, 1);
+    this.paneAt = tab.panes.length ? Math.max(0, this.paneAt - 1) : null;
+  }
+
+  movePane(delta) {
+    const panes = this.tab()?.panes;
+    const to = (this.paneAt ?? -1) + delta;
+    if (!this.pane() || to < 0 || to >= panes.length) return;
+    [panes[this.paneAt], panes[to]] = [panes[to], panes[this.paneAt]];
+    this.paneAt = to;
+  }
+
+  setPaneType(type) { const pane = this.pane(); if (pane) pane.type = type; }
+
+  cycleDirection() { const pane = this.pane(); if (pane) pane.direction = pane.direction === "right" ? "down" : "right"; }
+
+  /** Replaces the selected tab's panes with a layout's. The tab's agent (command, arguments, prompt) goes to the
+   *  layout's first agent pane. */
+  panesFromLayout(name) {
+    const tab = this.tab();
+    const layout = this.layouts.find((l) => l.name === name);
+    if (!tab || !Array.isArray(layout?.panes)) return;
+    this.collectTabs();
+    const src = firstAgent([tab])?.pane;
+    const panes = layout.panes.map((x) => blankPane({ type: String(x.command ?? "").trim() ? "command" : "shell", ...x }));
+    const dest = panes.find((x) => x.type === "agent");
+    if (src && dest) Object.assign(dest, { agent: src.agent, args: src.args, prompt: src.prompt, promptMode: src.promptMode });
+    tab.panes = panes;
+    this.setField(tab, "command", "");
+    this.paneAt = null;
+    this.makeBoxes();
+  }
+
+  /** The Startup section: setup commands, agent timing, the tabs list and the selected tab's and pane's fields. */
+  renderTabs(t, cx, field, input, label) {
+    const d = this.draft;
+    const tab = this.tab();
+    const pane = this.pane();
+    const val = (obj, f) => this.boxFor(obj, f).value();
+    const box = (obj, list, f) => { const [, name, note] = boxNote(list, f); return input(this.boxFor(obj, f), name, note); };
+    const dim = (text) => div().text_size(11.5).text_color(t.dim).child(text);
+    const act = (id, text, action, on = false, lead = null) => this.button(t, id, text, on, () => { action(); cx.notify(); }, lead);
+    const row = (id, on, cells, pick) => h_flex().id(id).gap(10).h(28).px(10).items_center().rounded(6).cursor_pointer()
+      .bg(on ? t.selected : t.raised).text_size(12.5).text_color(t.foreground)
+      .on_click(this.guard(`row ${id}`, () => { pick(); cx.notify(); })).children(cells);
+    const moves = (kind, add, del, move) => h_flex().pt(6).gap(6)
+      .child(act(`pp-${kind}-add`, `Add ${kind}`, add)).child(act(`pp-${kind}-del`, `Remove ${kind}`, del))
+      .child(act(`pp-${kind}-up`, "Move up", () => move(-1))).child(act(`pp-${kind}-down`, "Move down", () => move(1)));
+    const timing = d.startup.agentTiming === "with";
+    const out = [
+      field("setup"),
+      h_flex().pt(8).gap(8).items_center()
+        .child(act("pp-timing", `Agent timing: ${timing ? "with setup" : "after setup"}`, () => (d.startup.agentTiming = timing ? "after" : "with")))
+        .child(dim(timing ? "agents start while the setup commands run" : "agents start once the setup commands finish")),
+      label("Tabs"),
+      d.startup.tabs.length
+        ? v_flex().gap(3).children(d.startup.tabs.map((x, i) => row(`pp-tab-${i}`, i === this.tabAt, [
+          div().flex_1().min_w(0).font_medium().child(val(x, "name") || "(unnamed)"),
+          dim(val(x, "folder")),
+          dim(x.panes.length ? `${x.panes.length} pane${x.panes.length > 1 ? "s" : ""}` : val(x, "command") || "plain shell"),
+        ], () => this.selectTab(i))))
+        : dim("No tabs: a plain shell"),
+      moves("tab", () => this.addTab(), () => this.removeTab(), (k) => this.moveTab(k)),
+    ];
+    if (!tab) return out;
+    out.push(box(tab, TAB_BOXES, "name"), box(tab, TAB_BOXES, "folder"));
+    if (!tab.panes.length) out.push(box(tab, TAB_BOXES, "command"));
+    out.push(
+      label("Panes"),
+      tab.panes.length
+        ? v_flex().gap(3).children(tab.panes.map((x, j) => row(`pp-pane-${j}`, j === this.paneAt, [
+          div().w(64).child(x.type),
+          div().flex_1().min_w(0).child(x.type === "command" ? val(x, "command") : x.type === "agent" ? val(x, "agent") || "(no agent)" : ""),
+          dim(j === 0 ? "" : x.direction || "down"),
+        ], () => (this.paneAt = j))))
+        : dim("No panes: the tab runs its command, or a plain shell"),
+      moves("pane", () => this.addPane(), () => this.removePane(), (k) => this.movePane(k)),
+      h_flex().pt(6).gap(6).items_center().flex_wrap().child(dim("Panes from:"))
+        .children(this.layouts.filter((l) => Array.isArray(l.panes)).map((l, i) => act(`pp-fromlay-${i}`, l.label ?? l.name, () => this.panesFromLayout(l.name)))),
+    );
+    if (!pane) return out;
+    out.push(
+      label(`Pane ${this.paneAt + 1}`),
+      h_flex().gap(6).items_center()
+        .children(["agent", "shell", "command"].map((ty) => act(`pp-ptype-${ty}`, ty, () => this.setPaneType(ty), pane.type === ty)))
+        .when(this.paneAt > 0, (el) => el.child(act("pp-pdir", `Direction: ${pane.direction || "down"}`, () => this.cycleDirection()))),
+      box(pane, PANE_BOXES, "folder"),
+    );
+    if (pane.type === "command") out.push(box(pane, PANE_BOXES, "command"));
+    if (pane.type === "agent") {
+      const agent = this.boxFor(pane, "agent");
+      const chip = (id, text, value, lead, faint) => act(id, text, () => { agent.set_value(value); pane.promptMode = /^hermes\b/.test(value) ? "send" : "arg"; }, agent.value().trim() === value, lead).when(faint, (el) => el.opacity(0.6));
+      const send = pane.promptMode === "send";
+      out.push(
+        label("Agent"),
+        h_flex().flex_wrap().gap(6)
+          .child(chip("pp-agent-shell", "Shell", "", this.shellIcon(t, 14), false))
+          .children(this.agents.map((a, i) => chip(`pp-agent-${i}`, a.name, a.run.join(" "), this.programIcon(t, a, 14), a.installed === false))),
+        box(pane, PANE_BOXES, "agent"),
+        box(pane, PANE_BOXES, "args"),
+        box(pane, PANE_BOXES, "prompt"),
+        h_flex().pt(8).gap(8).items_center()
+          .child(act("pp-pmode", `Prompt: ${send ? "typed after start" : "command-line argument"}`, () => (pane.promptMode = send ? "arg" : "send")))
+          .child(dim(send ? "for agents that reject a prompt argument" : "claude and most agents")),
+      );
+    }
+    return out;
   }
 
   editSelected() {
@@ -1138,14 +1358,16 @@ export default class ProjectPresets extends View {
     const label = (text, note) => h_flex().gap(8).items_baseline().pt(10).pb(5)
       .child(div().text_size(11.5).text_color(t.dim).child(text))
       .when(Boolean(note), (el) => el.child(div().text_size(10.5).text_color(t.muted ?? t.dim).child(note)));
+    this.fieldOrder = []; // the boxes in the order shown, for Tab (see focusNextField)
+    const input = (state, name, note) => {
+      this.fieldOrder.push(state);
+      return v_flex().child(label(name, note))
+        .child(Input.new(state).h(34).px(10).rounded(8).border_1().border_color(this.focused === state ? t.accent : t.input).bg(t.background).text_size(12.8).text_color(t.foreground));
+    };
     const field = (key) => {
       const [, name, , , note] = TEXT.find(([k]) => k === key);
-      const state = this.fields.find(([k]) => k === key)[1];
-      return v_flex().child(label(name, note))
-        .child(Input.new(state).h(34).px(10).rounded(8).border_1().border_color(this.field === key ? t.accent : t.input).bg(t.background).text_size(12.8).text_color(t.foreground));
+      return input(this.fieldState(key), name, note);
     };
-    const agentState = () => this.fields.find(([k]) => k === "agent")[1];
-    const chip = (id, text, value, lead, dim) => this.button(t, id, text, agentState().value().trim() === value, () => { agentState().set_value(value); this.draft.startup.promptMode = /^hermes\b/.test(value) ? "send" : "arg"; cx.notify(); }, lead).when(dim, (el) => el.opacity(0.6));
     const toggle = (id, text, value, set) => this.button(t, id, `${value ? "✓" : "○"} ${text}`, false, () => { set(!value); cx.notify(); });
     const sections = {
       project: () => [
@@ -1153,6 +1375,7 @@ export default class ProjectPresets extends View {
         field("path"),
         h_flex().pt(6).gap(8).child(this.button(t, "pp-browse", "Browse…", false, () => this.browse(cx))),
         field("group"),
+        field("description"),
         h_flex().pt(10).child(toggle("pp-pin", "Pin to top", d.pinned, (v) => (d.pinned = v))),
       ],
       worktree: () => [
@@ -1173,21 +1396,7 @@ export default class ProjectPresets extends View {
         field("remote"),
         field("base"),
       ],
-      startup: () => [
-        label("Agent"),
-        h_flex().flex_wrap().gap(6)
-          .child(chip("pp-agent-shell", "Shell", "", this.shellIcon(t, 14), false))
-          .children(this.agents.map((a, i) => chip(`pp-agent-${i}`, a.name, a.run.join(" "), this.programIcon(t, a, 14), a.installed === false))),
-        field("agent"),
-        field("args"),
-        field("prompt"),
-        h_flex().pt(8).gap(8).items_center()
-          .child(this.button(t, "pp-pmode", `Prompt: ${d.startup.promptMode === "send" ? "typed after start" : "command-line argument"}`, false, () => { d.startup.promptMode = d.startup.promptMode === "send" ? "arg" : "send"; cx.notify(); }))
-          .child(div().text_size(11.5).text_color(t.dim).child(d.startup.promptMode === "send" ? "for agents that reject a prompt argument" : "claude and most agents")),
-        field("layout"),
-        field("setup"),
-        field("tabs"),
-      ],
+      startup: () => this.renderTabs(t, cx, field, input, label),
     };
     return v_flex().gap(0).min_h(0)
       .child(this.title(t, { add: "Add project", edit: "Edit project", duplicate: "Duplicate project", template: "Edit template", fromTemplate: "New project from the template" }[this.editKind ?? "add"], `Tab next field · ${key("s", "ctrl")} save · ${backKey()} back · Esc closes`))

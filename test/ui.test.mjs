@@ -10,7 +10,7 @@ import { makeRepo, scratch, sh } from "./helpers/repo.mjs";
 const { state, reset, calls, resetCalls, setShared } = await import("./helpers/herdr-stub.mjs");
 const { textOf, findAll } = await import("./helpers/gpui-stub.mjs");
 const { default: Picker } = await import("../mods/projects/main.js");
-const { normalize } = await import("../mods/projects/lib.js");
+const { normalize, firstAgent } = await import("../mods/projects/lib.js");
 
 const dataFile = () => `${state.appHome}/data/projects.json`;
 beforeEach(reset);
@@ -331,16 +331,21 @@ test("the editor renders all four sections", async () => {
     v.showSection(id);
     assert.ok(texts(v).length > 0, id);
   }
+  v.showSection("project");
+  assert.match(texts(v), /Description/);
   v.showSection("startup");
-  assert.match(texts(v), /Pane layout/);
+  assert.match(texts(v), /Tabs/);
   assert.match(texts(v), /Setup commands/);
   cx.fire(80);
 });
 
+const clickId = (v, cx, id) => findAll(rendered(v), (e) => e.op?.("id")?.[0] === id)[0].op("on_click")[0]({}, cx);
+
 test("the startup section offers every agent, with icons, dimmed when not installed, and Shell first", async () => {
-  const { v } = await open([proj("demo", "/r/demo")]);
+  const { v, cx } = await open([proj("demo", "/r/demo", { startup: AG("claude") })]);
   v.editSelected();
   v.showSection("startup");
+  clickId(v, cx, "pp-pane-0");
   const tree = rendered(v);
   const chipEls = findAll(tree, (e) => e.tag === "h_flex" && /^pp-agent-/.test(e.op("id")?.[0] ?? ""));
   const names = chipEls.map(textOf);
@@ -356,22 +361,69 @@ test("the startup section offers every agent, with icons, dimmed when not instal
 });
 
 test("clicking an agent chip fills the agent field; Hermes switches the prompt to typed-after-start", async () => {
-  const { v } = await open([proj("demo", "/r/demo")]);
+  const { v, cx } = await open([proj("demo", "/r/demo", { startup: AG("claude") })]);
   v.editSelected();
   v.showSection("startup");
+  clickId(v, cx, "pp-pane-0");
+  const pane = v.draft.startup.tabs[0].panes[0];
   const click = (name) => {
     const el = findAll(rendered(v), (e) => e.tag === "h_flex" && textOf(e) === name && /^pp-agent-/.test(e.op("id")?.[0] ?? ""))[0];
     el.op("on_click")[0]();
   };
-  const agent = () => v.fields.find(([k]) => k === "agent")[1].value();
+  const agent = () => v.boxFor(v.draft.startup.tabs[0].panes[0], "agent").value();
   click("Codex");
   assert.equal(agent(), "codex");
-  assert.equal(v.draft.startup.promptMode, "arg");
+  assert.equal(pane.promptMode, "arg");
   click("Hermes");
   assert.equal(agent(), "hermes");
-  assert.equal(v.draft.startup.promptMode, "send");
+  assert.equal(pane.promptMode, "send");
   click("Shell");
   assert.equal(agent(), "");
+});
+
+test("Add tab adds a row, its fields edit the draft, and Save writes the tabs", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("shop", dir)]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.addTab(); v.boxFor(v.draft.startup.tabs.at(-1), "name").set_value("git"); v.boxFor(v.draft.startup.tabs.at(-1), "command").set_value("lazygit");
+  await v.save(cx);
+  const saved = JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.tabs;
+  assert.deepEqual(saved.at(-1), { name: "git", folder: "", command: "lazygit", panes: [] });
+});
+test("moving a tab keeps what was typed in its boxes", async () => {
+  const { v, cx } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "a" }, { name: "b" }] } })]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.tabAt = 1; v.boxFor(v.draft.startup.tabs[1], "name").set_value("bee"); v.moveTab(-1);
+  assert.equal(v.tabAt, 0);
+  assert.equal(v.boxFor(v.draft.startup.tabs[0], "name").value(), "bee");
+});
+test("Add pane on a command tab turns the command into pane 1; type chips and direction edit the pane", async () => {
+  const { v, cx } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "a", command: "top" }] } })]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.addPane();
+  assert.deepEqual(v.draft.startup.tabs[0].panes.map((x) => [x.type, x.command, x.direction]), [["command", "top", ""], ["shell", "", "down"]]);
+  v.setPaneType("agent"); v.cycleDirection();
+  assert.deepEqual([v.draft.startup.tabs[0].panes[1].type, v.draft.startup.tabs[0].panes[1].direction], ["agent", "right"]);
+});
+test("Save shows tabPlan's message for a tab without a name and keeps the editor open", async () => {
+  const { v, cx } = await open([proj("shop", "/r/shop")]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup"); v.addTab();
+  await v.save(cx);
+  assert.equal(v.mode, "edit"); assert.match(v.error, /Tab 2 needs a name/);
+});
+test("Panes from a layout replaces the tab's panes and keeps its agent settings", async () => {
+  const { v, cx } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "a", panes: [{ type: "agent", agent: "codex", args: "-q" }] }] } })]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.panesFromLayout("agent-side-terminal");
+  assert.deepEqual(v.draft.startup.tabs[0].panes.map((x) => [x.type, x.agent, x.direction]), [["agent", "codex", ""], ["shell", "", "right"]]);
+});
+test("the Agent timing button toggles and is saved", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("shop", dir)]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  findAll(rendered(v), (e) => e.op?.("id")?.[0] === "pp-timing")[0].op("on_click")[0]({}, cx);
+  await v.save(cx);
+  assert.equal(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.agentTiming, "with");
 });
 
 test("saving keeps a folder's trailing space, the layouts and other keys", async () => {
@@ -384,12 +436,12 @@ test("saving keeps a folder's trailing space, the layouts and other keys", async
   await v.reload(cx);
   await cx.settle();
   v.edit(normalize({ name: "Spacey", path: dir }), null);
-  v.fields.find(([k]) => k === "layout")[1].set_value("coding");
+  v.panesFromLayout("coding");
   await v.save(cx);
   assert.equal(v.error, null);
   const saved = JSON.parse(readFileSync(dataFile(), "utf8"));
   assert.equal(saved.projects[0].path, dir);
-  assert.equal(saved.projects[0].startup.layout, "coding");
+  assert.deepEqual(saved.projects[0].startup.tabs[0].panes.map((x) => [x.type, x.command, x.direction]), [["agent", "", ""], ["command", "yazi .", "right"]]);
   assert.deepEqual(saved.layouts, LAYOUTS);
   assert.equal(saved.note, "keep");
   assert.equal(v.mode, "list");
@@ -546,17 +598,19 @@ test("Browse… fills the folder and, when empty, the name", async () => {
   assert.equal(v.fields.find(([k]) => k === "name")[1].value(), dir.split("/").pop());
 });
 
-test("a layout typed in the editor is saved with the project and used on the next open", async () => {
+test("panes chosen from a layout in the editor are saved and built on the next open", async () => {
   const dir = makeRepo();
   const { v, cx } = await open([proj("demo", dir, { worktree: { mode: "never" } })]);
   v.editSelected();
-  v.fields.find(([k]) => k === "layout")[1].set_value("agent-side-terminal");
+  v.showSection("startup");
+  clickId(v, cx, "pp-fromlay-0");
   await v.save(cx);
-  assert.equal(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.layout, "agent-side-terminal");
+  assert.equal(v.error, null);
+  assert.deepEqual(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.tabs[0].panes.map((x) => [x.type, x.direction]), [["agent", ""], ["shell", "down"]]);
   enter(v);
   await cx.settle();
   assert.equal(state.splits.length, 1);
-  assert.equal(state.splits[0].direction, "right");
+  assert.equal(state.splits[0].direction, "down");
 });
 
 // ---------------------------------------------------------------- sections, git chips and the detail card
@@ -1055,6 +1109,9 @@ test("the worktree list scrolls with its highlight too", async () => {
 
 const T = { detail: true, template: true };
 const fieldOf = (v, key) => v.fields.find(([k]) => k === key)[1];
+/** The editor's box for the draft's first agent pane, and a project's first agent command. */
+const agentBox = (v) => v.boxFor(firstAgent(v.draft.startup.tabs).pane, "agent");
+const agentOf = (p) => firstAgent(p.startup.tabs)?.pane.agent ?? "";
 const rowNames = (v) => v.rows().map((r) => r.p.name);
 
 test("the default template is the last row for everyone, tagged and under its own header", async () => {
@@ -1091,7 +1148,7 @@ test("Enter on the template opens the editor on a new project with its settings 
   assert.equal(v.editKind, "fromTemplate");
   assert.equal(fieldOf(v, "name").value(), "New project");
   assert.equal(fieldOf(v, "path").value(), "");
-  assert.equal(fieldOf(v, "agent").value(), "claude");
+  assert.equal(agentBox(v).value(), "claude");
   assert.ok(texts(v).includes("New project from the template"));
   assert.equal(v.index, null);
   assert.deepEqual(spaceNew(), [], "nothing was launched");
@@ -1113,7 +1170,7 @@ test("saving a project made from the template needs a folder, and keeps the temp
   assert.equal(v.mode, "list");
   const saved = JSON.parse(readFileSync(dataFile(), "utf8")).projects;
   assert.deepEqual(saved.map((p) => p.name), ["api"]);
-  assert.equal(saved[0].startup.agent, "claude");
+  assert.equal(agentOf(saved[0]), "claude");
   assert.equal(saved[0].template, undefined);
   assert.deepEqual(rowNames(v), ["api", "Template"], "the template is still there");
 });
@@ -1127,7 +1184,7 @@ test("ctrl+alt+U duplicates the highlighted project: a copy to edit, same folder
   assert.ok(texts(v).includes("Duplicate project"));
   assert.equal(fieldOf(v, "name").value(), "api copy");
   assert.equal(fieldOf(v, "path").value(), dir);
-  assert.equal(fieldOf(v, "agent").value(), "codex");
+  assert.equal(agentBox(v).value(), "codex");
   assert.equal(v.draft.pinned, false);
   await v.save(cx);
   assert.equal(v.error, null);
@@ -1148,25 +1205,25 @@ test("the Duplicate button does the same, and Escape leaves without saving", asy
 
 test("editing the template saves it as a real entry; Add project then starts from it", async () => {
   const { v, cx } = await open([proj("api", "/r/api")], undefined, T);
-  assert.equal(v.newProject().startup.agent, "", "before it is saved, Add project is blank");
+  assert.equal(agentOf(v.newProject()), "", "before it is saved, Add project is blank");
   assert.equal(v.newProject().name, "");
   v.at = rowNames(v).indexOf("Template");
   press(v, cx, "e", { alt: true });
   assert.equal(v.editKind, "template");
   assert.ok(texts(v).includes("Edit template"));
-  fieldOf(v, "agent").set_value("hermes");
+  agentBox(v).set_value("hermes");
   fieldOf(v, "group").set_value("starter");
   await v.save(cx);
   assert.equal(v.error, null, "no folder needed for a template");
   const saved = JSON.parse(readFileSync(dataFile(), "utf8")).projects;
   const tpl = saved.find((p) => p.template);
-  assert.equal(tpl.startup.agent, "hermes");
+  assert.equal(agentOf(tpl), "hermes");
   assert.equal(v.virtualTemplate, null, "the unsaved one is gone");
   assert.deepEqual(rowNames(v), ["api", "Template"]);
   const fresh = v.newProject();
-  assert.deepEqual([fresh.startup.agent, fresh.group, fresh.name, fresh.path], ["hermes", "starter", "", ""]);
+  assert.deepEqual([agentOf(fresh), fresh.group, fresh.name, fresh.path], ["hermes", "starter", "", ""]);
   press(v, cx, "n", { alt: true });
-  assert.equal(fieldOf(v, "agent").value(), "hermes", "the n key opens the editor with the template's settings");
+  assert.equal(agentBox(v).value(), "hermes", "the n key opens the editor with the template's settings");
 });
 
 test("deleting the template hides it for good", async () => {
