@@ -211,6 +211,8 @@ export default class ProjectPresets extends View {
     if (d.view === "edit") {
       this.edit(project ?? blankProject(), project ? this.projects.indexOf(project) : null);
       if (d.section) this.showSection(d.section);
+      if (d.tab != null) this.tabAt = d.tab;
+      if (d.pane != null) this.paneAt = d.pane;
       if (d.focus) this.fields.find(([k]) => k === d.focus)?.[1].focus();
     } else if (d.view === "duplicate") this.duplicateSelected(); // a copy of the project, or a new project from the template when that row is picked
     else if (d.view === "backup") {

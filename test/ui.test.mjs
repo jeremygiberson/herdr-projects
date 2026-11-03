@@ -1489,3 +1489,9 @@ test("with no launcher blocks in the layout, the Launcher button writes a copy w
   assert.ok(["projects-launch-sidebar", "projects-launch-status", "projects-launch-tabs"].every((id) => text.includes(id)));
   assert.deepEqual(state.runs.map((r) => [r.command, r.args.name]), [["layout.switch", "main-launcher"]], "no layout.clone and no layout.set");
 });
+
+test("a demo file can open the editor on a given tab and pane", async () => {
+  const { v } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "a" }, { name: "b", panes: [{ type: "shell" }, { type: "shell", direction: "down" }] }] } })]);
+  v.applyDemo({ view: "edit", project: "shop", section: "startup", tab: 1, pane: 1 });
+  assert.deepEqual([v.mode, v.section, v.tabAt, v.paneAt], ["edit", "startup", 1, 1]);
+});
