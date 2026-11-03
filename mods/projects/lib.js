@@ -385,15 +385,15 @@ export function expandSetup(text, vars) {
 /** "export A='x'; export B='y'": the env for a shell line, values quoted. */
 export const exportsPrefix = (env) => Object.entries(env ?? {}).map(([k, v]) => `export ${k}=${shq(v)}`).join("; ");
 
-/** One setup step as its own shell (braces expanded, otherwise verbatim), so its `#`, `;`, `&` and `||` stay inside it;
- *  `-e` makes a step like `a; b` fail when `a` fails. */
-export const setupStep = (step, vars) => `sh -ec ${shq(expandSetup(step, vars))}`;
+/** The steps (verbatim) as one `sh -e` script on one line: `printf '%s\n'` puts each step on its own line, so a
+ *  `cd` reaches the steps after it and a `#`, `;`, `&` or `||` stays on its line; `-e` stops at the first failure. */
+export const setupScript = (steps) => `sh -ec "$(printf '%s\\n' ${steps.map(shq).join(" ")})"`;
 
-/** One shell line: export the env, cd to `folder`, run each step in its own shell, touch `marker` when given.
- *  "" when there are no steps. */
+/** One shell line: export the env, cd to `folder`, run the steps (braces expanded) as one script, touch `marker`
+ *  when given. "" when there are no steps. */
 export function setupChain({ steps, vars, env, folder, marker }) {
   if (!(steps ?? []).length) return "";
-  const chain = [`cd ${shq(folder)}`, ...steps.map((x) => setupStep(x, vars)), ...(marker ? [`touch ${shq(marker)}`] : [])].join(" && ");
+  const chain = [`cd ${shq(folder)}`, setupScript(steps.map((x) => expandSetup(x, vars))), ...(marker ? [`touch ${shq(marker)}`] : [])].join(" && ");
   const exports = exportsPrefix(env);
   return exports ? `${exports}; ${chain}` : chain;
 }
@@ -405,6 +405,11 @@ export const chainThenAgent = (chain, argv, prompt, dir) =>
 
 /** The chain alone; a shell takes over when it ends or fails. */
 export const chainAlone = (chain) => `${chain} || exec "$SHELL"`;
+
+/** `line` as a command for the person's own shell, interactive and login (`$SHELL -ilc`), so it has the PATH and
+ *  tools their terminals have: a program the app starts gets only the login PATH, which misses what .zshrc or
+ *  .bashrc adds (nvm's node, pnpm, pyenv). Falls back to sh when SHELL is unset. */
+export const inUserShell = (line) => ["sh", "-c", 'exec "${SHELL:-sh}" -ilc "$1"', "sh", line];
 
 /** "2 copy · 3 setup · agent after setup" ("setup inline" when it runs in the popup), or "no setup". */
 export function setupSummary(project) {

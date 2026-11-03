@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, matchAutoLayout, repoNameFromKey, tabsForAuto, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, matchAutoLayout, repoNameFromKey, tabsForAuto, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix, setupScript, inUserShell } from "../mods/projects/lib.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -605,10 +605,11 @@ test("setupVars gives braces and env in a fixed order", () => {
   assert.deepEqual(vars, { main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" });
   assert.deepEqual(Object.keys(env), ["PROJECTS_MAIN", "PROJECTS_FOLDER", "PROJECTS_BRANCH", "PROJECTS_REPO", "PROJECTS_NAME", "PROJECTS_HOME"]);
 });
-test("setupChain exports env, cds, runs each step in its own shell with braces expanded, and touches the marker", () => {
+test("setupChain exports env, cds, runs the steps as one script with braces expanded, and touches the marker", () => {
   const { vars, env } = setupVars({ main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" });
   const c = setupChain({ steps: ["cp {main}/.env .env", "echo 'it''s $HOME' && true"], vars, env, folder: "/w", marker: "/w/.projects-setup-done" });
-  assert.equal(c, `export PROJECTS_MAIN='/m'; export PROJECTS_FOLDER='/w'; export PROJECTS_BRANCH='b'; export PROJECTS_REPO='r'; export PROJECTS_NAME='N'; export PROJECTS_HOME='/h'; cd '/w' && sh -ec 'cp /m/.env .env' && sh -ec ${shq("echo 'it''s $HOME' && true")} && touch '/w/.projects-setup-done'`);
+  assert.equal(c, `export PROJECTS_MAIN='/m'; export PROJECTS_FOLDER='/w'; export PROJECTS_BRANCH='b'; export PROJECTS_REPO='r'; export PROJECTS_NAME='N'; export PROJECTS_HOME='/h'; cd '/w' && sh -ec "$(printf '%s\\n' 'cp /m/.env .env' ${shq("echo 'it''s $HOME' && true")})" && touch '/w/.projects-setup-done'`);
+  assert.equal(setupScript(["a", "b c"]), `sh -ec "$(printf '%s\\n' 'a' 'b c')"`);
   assert.equal(setupChain({ steps: [], vars, env, folder: "/w" }), "");
   assert.ok(!setupChain({ steps: ["x"], vars, env, folder: "/w" }).includes("touch"));
 });
@@ -640,6 +641,19 @@ test("a step with a trailing & does not break the chain, and steps run in the fo
   const r = runChain(["sleep 0 &", "pwd -P > where.txt"]);
   assert.deepEqual([r.ok, r.marked], [true, true]);
   assert.equal(readFileSync(join(r.dir, "where.txt"), "utf8").trim(), realpathSync(r.dir));
+});
+test("a cd on one line reaches the lines after it, and a # comment or a literal \\n in a step stays as written", () => {
+  const r = runChain(["mkdir sub", "cd sub # move in", "printf 'a\\nb' > here.txt", "cd ..", "touch top.txt"]);
+  assert.deepEqual([r.ok, r.marked], [true, true]);
+  assert.equal(readFileSync(join(r.dir, "sub/here.txt"), "utf8"), "a\nb", "printf's own \\n is interpreted by printf, not by the script builder");
+  assert.ok(existsSync(join(r.dir, "top.txt")));
+});
+test("inUserShell runs the line in $SHELL as an interactive login shell, falling back to sh", () => {
+  const [cmd, ...args] = inUserShell("printf '%s' \"$0 $-\" > out.txt");
+  assert.deepEqual([cmd, args.slice(0, 2)], ["sh", ["-c", 'exec "${SHELL:-sh}" -ilc "$1"']]);
+  const dir = scratch();
+  execFileSync(cmd, args, { cwd: dir, env: { ...process.env, SHELL: "/bin/sh" }, stdio: "pipe" });
+  assert.match(readFileSync(join(dir, "out.txt"), "utf8"), /^\/bin\/sh .*i/, "the line ran in /bin/sh with -i");
 });
 test("a step with || keeps its own fallback and the chain goes on", () => {
   const r = runChain(["false || touch fell.txt", "touch next.txt"]);

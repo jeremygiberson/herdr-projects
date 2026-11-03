@@ -45,7 +45,7 @@ test("launch opens one tab per extra command", async () => {
   const p = project(dir, { startup: { tabs: ["npm run dev", "tail -f log"] } });
   await build(p, dir, "Demo");
   assert.deepEqual(state.tabsMade.map((t) => t.name), ["npm", "tail"]);
-  assert.deepEqual(state.tabsMade[0], { space: "sp1", name: "npm", folder: dir, argv: ["sh", "-c", "npm run dev"] });
+  assert.deepEqual(state.tabsMade[0], { space: "sp1", name: "npm", folder: dir, argv: ["sh", "-c", 'exec "${SHELL:-sh}" -ilc "$1"', "sh", "npm run dev"] }, "a command runs in the person's own shell");
 });
 
 test("launch in 'send' mode starts the agent bare and types the prompt once it is idle", async () => {
@@ -119,7 +119,7 @@ test("launch builds a layout in the new space's pane, not the window it was open
   assert.deepEqual([files.direction, files.pane], ["right", "pane-of-sp1"]);
   assert.deepEqual([term.direction, term.pane], ["down", "pane-1"]);
   assert.deepEqual([logs.direction, logs.pane], ["down", "pane-of-sp1"]);
-  assert.deepEqual(files.argv.slice(4), [dir, "sh", "-c", "yazi ."]);
+  assert.deepEqual(files.argv.slice(4), [dir, "sh", "-c", 'exec "${SHELL:-sh}" -ilc "$1"', "sh", "yazi ."]);
   assert.deepEqual(term.argv.slice(4), [dir]);
   assert.deepEqual(state.runs.filter((r) => r.command === "pane.focus").map((r) => r.args), [{ pane: "pane-of-sp1" }]);
 });
@@ -173,7 +173,7 @@ test("a multi-tab project opens each later tab in its own folder with its comman
   const dir = realpathSync(makeRepo()); mkdirSync(join(dir, "web")); mkdirSync(join(dir, "api"));
   const p = normalize({ name: "Shop", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude" }] }, { name: "web", folder: "web", command: "npm run dev" }, { name: "api", folder: "api", panes: [{ command: "make run" }, { command: "psql", direction: "right" }] }] } });
   await W.buildWorkspace({ project: p, folder: dir, name: "Shop", tabs: p.startup.tabs, prompt: "", log: () => {} });
-  assert.deepEqual(state.tabsMade.map((t) => [t.name, t.folder, t.argv]), [["web", `${dir}/web`, ["sh", "-c", "npm run dev"]], ["api", `${dir}/api`, ["sh", "-c", "make run"]]]);
+  assert.deepEqual(state.tabsMade.map((t) => [t.name, t.folder, t.argv.at(-1)]), [["web", `${dir}/web`, "npm run dev"], ["api", `${dir}/api`, "make run"]]);
   assert.equal(state.splits.length, 1);
   assert.equal(state.splits[0].argv[4], `${dir}/api`);
   assert.equal(state.runs.find((r) => r.command === "space.new").args.tab, "agent", "the first tab is named too");
@@ -244,8 +244,8 @@ test("after timing: the agent pane runs the chain and execs the agent with its a
   const notes = [];
   await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "fix it", agentTiming: "after", chain: `cd '${dir}' && npm ci`, log: (m) => notes.push(m) });
   const sn = state.runs.find((r) => r.command === "space.new").args;
-  assert.deepEqual(sn.argv.slice(0, 2), ["sh", "-c"]);
-  assert.ok(sn.argv[2].endsWith(`npm ci && cd '${dir}' && exec 'claude' '--model' 'opus' 'fix it' || exec "$SHELL"`), sn.argv[2]);
+  assert.deepEqual(sn.argv.slice(0, 4), ["sh", "-c", 'exec "${SHELL:-sh}" -ilc "$1"', "sh"], "the chain runs in the person's own shell");
+  assert.ok(sn.argv[4].endsWith(`npm ci && cd '${dir}' && exec 'claude' '--model' 'opus' 'fix it' || exec "$SHELL"`), sn.argv[4]);
   assert.equal(sn.task, undefined);
   assert.ok(notes.includes("setup continues in the agent pane"));
   assert.equal(state.hcRuns.length, 0);
@@ -313,7 +313,7 @@ test("after timing: the agent starts in its own pane's folder, not the chain's",
   const dir = realpathSync(makeRepo()); mkdirSync(join(dir, "backend"));
   const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude", folder: "backend" }] }] } });
   await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "after", chain: `cd '${dir}' && true`, log: () => {} });
-  const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
+  const line = state.runs.find((r) => r.command === "space.new").args.argv[4];
   assert.ok(line.includes(`cd '${dir}/backend' && exec 'claude'`), line);
 });
 test("send mode types a prompt starting with - after --", async () => {
@@ -441,7 +441,7 @@ test("existing agent space with the agent at the first pane: nothing typed, the 
   existingSpace(dir);
   await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", agentTiming: "after", chain: "", log: () => {}, existing: existing(dir, true) });
   assert.deepEqual(state.sent, []);
-  assert.deepEqual([state.splits[0].pane, state.splits[0].argv.slice(-3)], ["paneX", ["sh", "-c", "yazi ."]]);
+  assert.deepEqual([state.splits[0].pane, state.splits[0].argv.slice(-2)], ["paneX", ["sh", "yazi ."]]);
 });
 test("existing shell space whose shell never comes to the front: the line is skipped and logged, the rest still builds", async () => {
   const dir = realpathSync(makeRepo()); state.foreground = "claude";

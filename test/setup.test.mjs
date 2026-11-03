@@ -75,11 +75,11 @@ test("prepareSetup on a new worktree copies, chains worktree then startup setup,
   const r = await prepareSetup({ project: setupProject(main), folder: wt, isWorktree: true, branch: "w", repo: "r", home: "/h", log: (m) => notes.push(m) });
   assert.equal(readFileSync(join(wt, ".env"), "utf8"), "A=1\n");
   assert.equal(r.marker, markerPath(wt));
-  assert.ok(r.chain.endsWith(`cd '${wt}' && sh -ec 'npm ci' && sh -ec 'echo w' && touch '${markerPath(wt)}'`), r.chain);
+  assert.ok(r.chain.endsWith(`cd '${wt}' && sh -ec "$(printf '%s\\n' 'npm ci' 'echo w')" && touch '${markerPath(wt)}'`), r.chain);
   assert.match(r.chain, /^export PROJECTS_MAIN=/);
   assert.deepEqual(r.steps, ["npm ci", "echo w"]);
   assert.equal(r.env.PROJECTS_FOLDER, wt);
-  assert.deepEqual(notes, ["copied 1 file", "will run: npm ci", "will run: echo {branch}"]);
+  assert.deepEqual(notes, ["copied 1 file", "2 setup commands run in the new space, not here"]);
   writeFileSync(markerPath(wt), "");
   assert.doesNotMatch(sh(wt, "status", "--porcelain", "--untracked-files=all"), /projects-setup-done/, "the marker is excluded");
 });

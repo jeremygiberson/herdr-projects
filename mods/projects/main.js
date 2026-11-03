@@ -13,7 +13,7 @@ import { prepareSetup } from "./setup.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
 import { Watcher } from "./watch.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, migrateLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, shq } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, migrateLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, setupScript, inUserShell, shq } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -64,11 +64,11 @@ const TEXT = [
   ["branchTemplate", "Branch name", (p) => p.worktree.branchTemplate, (p, v) => (p.worktree.branchTemplate = v), "{user} {date} {slug} {repo} {project}"],
   ["root", "Worktree folder", (p) => p.worktree.root, (p, v) => (p.worktree.root = v), "{repo} {branch} plus the above"],
   ["spaceName", "Space name", (p) => p.worktree.spaceName, (p, v) => (p.worktree.spaceName = v), "the sidebar name: {name} {branch} {slug} {user} {date} {repo}"],
-  ["copy", "Copy from the checkout", (p) => joinList(p.worktree.copy), (p, v) => (p.worktree.copy = splitList(v)), "one path or glob per line, relative to the checkout; existing files are kept", true],
-  ["wtSetup", "Worktree setup", (p) => joinList(p.worktree.setup), (p, v) => (p.worktree.setup = splitList(v)), "one command per line; runs once, when the worktree is new", true],
+  ["copy", "Copy from the checkout", (p) => joinList(p.worktree.copy), (p, v) => (p.worktree.copy = splitList(v)), "to the same relative path in the worktree; one path or glob per line; existing files are kept", true],
+  ["wtSetup", "One-time worktree setup", (p) => joinList(p.worktree.setup), (p, v) => (p.worktree.setup = splitList(v)), "a script: one command per line, from the worktree root; runs once, when the worktree is new", true],
   ["remote", "Remote", (p) => p.git.remote, (p, v) => (p.git.remote = v)],
   ["base", "Base branch", (p) => p.git.base, (p, v) => (p.git.base = v)],
-  ["setup", "Setup commands", (p) => joinList(p.startup.setup), (p, v) => (p.startup.setup = splitList(v)), "one command per line; runs on every open, after the worktree setup", true],
+  ["setup", "Every-open setup", (p) => joinList(p.startup.setup), (p, v) => (p.startup.setup = splitList(v)), "a script: one command per line, from the folder; runs on every open, after any one-time worktree setup", true],
 ];
 // The Startup section's boxes for a tab and for a pane: [field, label, note]. Each tab or pane object gets its own (see boxFor).
 const TAB_BOXES = [
@@ -846,7 +846,7 @@ export default class ProjectPresets extends View {
         .child(dim(timing ? "agent starts at once; setup runs in its own tab" : "agent starts once the setup commands finish")),
       h_flex().pt(8).gap(8)
         .child(toggle("pp-quicklaunch", "Quick launch: Enter opens at once with these defaults", d.quickLaunch, (v) => (d.quickLaunch = v)))
-        .child(toggle("pp-quicksetup", "Run setup inline (30 s per command, blocks the popup)", d.startup.quickSetup, (v) => (d.startup.quickSetup = v))),
+        .child(toggle("pp-quicksetup", "Run setup inline (30 s in all, blocks the popup)", d.startup.quickSetup, (v) => (d.startup.quickSetup = v))),
       label("Tabs"),
       d.startup.tabs.length
         ? v_flex().gap(3).children(d.startup.tabs.map((x, i) => row(`pp-tab-${i}`, i === this.tabAt, [
@@ -1598,17 +1598,17 @@ export default class ProjectPresets extends View {
   }
 }
 
-/** Quick setup: the steps (braces already expanded) one after another in `folder`, each in its own shell with the
- *  PROJECTS_* `env` exported, as in a chain; stops at the first failure. exec has a 30 s limit each. */
+/** Quick setup: the steps (braces already expanded) as one script in `folder`, in the person's own shell with the
+ *  PROJECTS_* `env` exported, as in a chain; stops at the first failure. exec has a 30 s limit for the whole script. */
 async function runInline(steps, folder, env, log) {
-  for (const step of steps) {
-    log(`$ ${step}`);
-    try {
-      const r = await exec("sh", ["-c", `${exportsPrefix(env)}; cd ${shq(folder)} && sh -ec ${shq(step)}`], { cwd: folder });
-      if (r.code !== 0) return log(`setup failed (${r.code}): ${step}`), false;
-    } catch {
-      return log(`setup stopped (timed out or couldn't start): ${step}`), false;
-    }
+  if (!steps.length) return true;
+  steps.forEach((step) => log(`$ ${step}`));
+  const line = `${exportsPrefix(env)}; cd ${shq(folder)} && ${setupScript(steps)}`;
+  try {
+    const r = await exec(inUserShell(line)[0], inUserShell(line).slice(1), { cwd: folder });
+    if (r.code !== 0) return log(`setup failed (exit ${r.code})`), false;
+  } catch {
+    return log("setup stopped (timed out after 30 s, or couldn't start)"), false;
   }
   return true;
 }

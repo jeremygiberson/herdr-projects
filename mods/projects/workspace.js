@@ -1,7 +1,7 @@
 // Everything that creates spaces, tabs and panes: a project's tabs become app commands here and nowhere else.
 import { exec, hc, run, spaces, home, appHome, writeTextFile, shared, setShared } from "herdr";
 import { log as diag } from "./log.js";
-import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder, chainThenAgent, chainAlone, commandName, shq } from "./lib.js";
+import { splitArgs, inFolder, tabPlan, firstAgent, resolveFolder, chainThenAgent, chainAlone, inUserShell, commandName, shq } from "./lib.js";
 import { folderExists, findSpace, projectFolder } from "./git.js";
 
 const sleep = (s) => exec("sleep", [String(s)]);
@@ -196,7 +196,7 @@ async function adoptExisting(existing, line) {
  *  Resolves to whether the chain started; when it didn't, `log` (the busy screen) says why. */
 async function startSetupTerminal(space, folder, chain, log) {
   const tabId = `setup-${Date.now()}`;
-  const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--cwd", folder, "--label", "herdr.space=" + space, "--label", "herdr.tab=" + tabId, "--", "sh", "-c", chainAlone(chain)]);
+  const r = await hc(["run", "--bg", "--rm", "--no-parent", "--no-notify", "--cwd", folder, "--label", "herdr.space=" + space, "--label", "herdr.tab=" + tabId, "--", ...inUserShell(chainAlone(chain))]);
   if (r.code !== 0) {
     const why = r.stderr.split("\n")[0] || `hc run exited ${r.code}`;
     diag("error", `couldn't start the setup terminal: ${why}`, { space, folder });
@@ -263,22 +263,26 @@ export async function buildWorkspace({ project, folder, name, tabs, prompt, agen
   const isLead = (ti, pi) => lead?.tab === ti && lead?.index === pi;
   // The existing space's agent fulfils the plan's first agent pane: elsewhere, that pane is a plain shell.
   const adopted = (ti, pi) => Boolean(existing?.agent && isLead(ti, pi));
+  /** The lead pane's chain-then-agent line, for "after" timing. */
+  const leadLine = (ti, pi) => chainThenAgent(chain, agentArgv(plan[ti].panes[pi]), arg ? prompt : "", dirs[ti][pi]);
+  // A command or a chain runs in the person's own shell (inUserShell), so it finds the tools their terminals find.
   const argvOf = (ti, pi) => {
     const pane = plan[ti].panes[pi];
-    if (pane.type === "command") return ["sh", "-c", pane.command];
+    if (pane.type === "command") return inUserShell(pane.command);
     if (adopted(ti, pi)) return [];
     const argv = agentArgv(pane);
-    if (after && isLead(ti, pi)) return ["sh", "-c", chainThenAgent(chain, argv, arg ? prompt : "", dirs[ti][pi])];
+    if (after && isLead(ti, pi)) return inUserShell(leadLine(ti, pi));
     return argv.length && arg && isLead(ti, pi) && !isFirst(ti, pi) ? [...argv, prompt] : argv;
   };
-  /** Pane (0,0)'s program as a line typed into a plain shell: the chain-then-agent line (it changes into the
-   *  pane's folder itself), or `cd` to the pane's folder and then `exec` the agent or run the command; "" for a shell pane. */
+  /** Pane (0,0)'s program as a line typed into a plain shell (the person's own, so no inUserShell): the chain-then-agent
+   *  line (it changes into the pane's folder itself), or `cd` to the pane's folder and then `exec` the agent or run the
+   *  command; "" for a shell pane. */
   const lineOf00 = () => {
     const pane = plan[0].panes[0];
     const cd = `cd ${shq(dirs[0][0])} && `;
     if (pane.type === "command") return cd + pane.command;
+    if (after && isLead(0, 0)) return leadLine(0, 0);
     const argv = argvOf(0, 0);
-    if (after && isLead(0, 0)) return argv[2];
     return argv.length ? `${cd}exec ${argv.map(shq).join(" ")}` : "";
   };
   let problems = 0;

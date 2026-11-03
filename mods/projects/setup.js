@@ -77,7 +77,7 @@ export async function copyInto({ main, dest, patterns, vars, log }) {
  *  copies `worktree.copy`, and the steps are `worktree.setup` then `startup.setup`; otherwise only `startup.setup`.
  *  `marker` is the file to touch once those steps succeed (a new worktree with steps), which the chain touches itself
  *  unless setup runs inline (`startup.quickSetup`, where the caller touches it); it is added to git's exclude file here.
- *  `log` gets the copy summary and, for a chain, a "will run: <step>" line per step.
+ *  `log` gets the copy summary and, for a chain, one line saying how many commands the space will run.
  *  Resolves to { chain, marker, steps (braces expanded, for inline setup), env (PROJECTS_*) }. */
 export async function prepareSetup({ project, folder, isWorktree, branch, repo, home, log }) {
   const main = expandHome(project.path, home); // the project's checkout, as projectFolder gives it
@@ -88,6 +88,6 @@ export async function prepareSetup({ project, folder, isWorktree, branch, repo, 
   const raw = (isNew ? project.worktree.setup : []).concat(project.startup.setup);
   const marker = isNew && raw.length ? markerPath(folder) : undefined;
   if (marker) await excludeMarker(folder);
-  if (!quick) raw.forEach((x) => log(`will run: ${x}`));
+  if (!quick && raw.length) log(`${raw.length} setup ${raw.length === 1 ? "command runs" : "commands run"} in the new space, not here`);
   return { chain: setupChain({ steps: raw, vars, env, folder, marker: quick ? undefined : marker }), marker, steps: raw.map((x) => expandSetup(x, vars)), env };
 }

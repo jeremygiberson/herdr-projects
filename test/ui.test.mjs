@@ -229,7 +229,7 @@ test("a layout picked at launch wins over the project's own, and the project's o
   });
   assert.equal(state.splits.length, 1);
   assert.equal(state.splits[0].direction, "right");
-  assert.deepEqual(state.splits[0].argv.slice(5), ["sh", "-c", "yazi ."]);
+  assert.deepEqual(state.splits[0].argv.slice(-2), ["sh", "yazi ."]);
 });
 
 test("an unknown layout name stops before anything is created and says which layouts exist", async () => {
@@ -350,7 +350,7 @@ test("the editor renders all four sections", async () => {
   assert.match(texts(v), /Description/);
   v.showSection("startup");
   assert.match(texts(v), /Tabs/);
-  assert.match(texts(v), /Setup commands/);
+  assert.match(texts(v), /Every-open setup/);
   cx.fire(80);
 });
 
@@ -1668,19 +1668,21 @@ test("opening a new worktree copies the listed files, runs worktree and startup 
   enter(v); enter(v); await cx.settle(); // the launch screen, then launch
   const wt = state.runs.find((r) => r.command === "space.new").args.folder;
   assert.equal(readFileSync(join(wt, ".env"), "utf8"), "A=1\n");
-  const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
-  assert.match(line, /sh -ec 'npm ci' && sh -ec 'echo hi' && touch '.*\.projects-setup-done' && cd '[^']*' && exec 'claude'/);
+  const argv = state.runs.find((r) => r.command === "space.new").args.argv;
+  assert.deepEqual(argv.slice(0, 3), ["sh", "-c", 'exec "${SHELL:-sh}" -ilc "$1"'], "the chain runs in the person's own shell");
+  const line = argv[4];
+  assert.match(line, /sh -ec "\$\(printf '%s\\n' 'npm ci' 'echo hi'\)" && touch '.*\.projects-setup-done' && cd '[^']*' && exec 'claude'/);
   assert.match(readFileSync(excludeFile(wt), "utf8"), /projects-setup-done/);
   assert.ok(v.notes.some((n) => /copied 1 file/.test(n)));
-  assert.ok(["will run: npm ci", "will run: echo hi"].every((n) => v.notes.includes(n)), v.notes.join(" | "));
+  assert.ok(v.notes.includes("2 setup commands run in the new space, not here"), v.notes.join(" | "));
 });
 test("a worktree that already carries the marker gets only the startup setup: no copy, no worktree setup, no touch", async () => {
   const dir = realpathSync(makeRepo()); const wt = join(scratch("pp-wt"), "w"); sh(dir, "worktree", "add", "-q", wt, "-b", "w");
   writeFileSync(join(wt, ".projects-setup-done"), ""); writeFileSync(join(dir, ".env"), "A=1\n");
   const { v, cx } = await open([proj("wt", wt, { worktree: { mode: "never", copy: [".env"], setup: ["echo X"] }, startup: { setup: ["echo Y"], agentTiming: "after", ...AG("claude") } })]);
   enter(v); enter(v); await cx.settle(); // the launch screen, then launch
-  const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
-  assert.match(line, /sh -ec 'echo Y' && cd '[^']*' && exec/); assert.doesNotMatch(line, /echo X|touch/);
+  const line = state.runs.find((r) => r.command === "space.new").args.argv[4];
+  assert.match(line, /sh -ec "\$\(printf '%s\\n' 'echo Y'\)" && cd '[^']*' && exec/); assert.doesNotMatch(line, /echo X|touch/);
   assert.equal(existsSync(join(wt, ".env")), false);
 });
 test("quickSetup runs the steps inline before the agent and passes no chain", async () => {
@@ -1690,7 +1692,7 @@ test("quickSetup runs the steps inline before the agent and passes no chain", as
   assert.equal(existsSync(join(dir, "ran.txt")), true);
   assert.deepEqual(state.runs.find((r) => r.command === "space.new").args.argv, ["claude"]);
   assert.ok(v.notes.some((n) => n === "$ touch ran.txt"));
-  assert.ok(!v.notes.some((n) => n.startsWith("will run:")));
+  assert.ok(!v.notes.some((n) => n.endsWith("not here")));
 });
 test("inline setup steps get the PROJECTS_* env", async () => {
   const dir = realpathSync(makeRepo());
