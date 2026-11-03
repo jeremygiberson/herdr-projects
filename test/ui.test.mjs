@@ -411,6 +411,16 @@ test("Save shows tabPlan's message for a tab without a name and keeps the editor
   await v.save(cx);
   assert.equal(v.mode, "edit"); assert.match(v.error, /Tab 2 needs a name/);
 });
+test("two agent panes from a layout save without a name clash", async () => {
+  const dir = realpathSync(makeRepo());
+  const pair = [{ name: "pair", panes: [{ type: "agent" }, { type: "agent", direction: "right" }] }];
+  const { v, cx } = await open([proj("shop", dir, { startup: AG("claude") })], pair);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  v.panesFromLayout("pair");
+  await v.save(cx);
+  assert.equal(v.error, null);
+  assert.equal(v.mode, "list");
+});
 test("Panes from a layout replaces the tab's panes and keeps its agent settings", async () => {
   const { v, cx } = await open([proj("shop", "/r/shop", { startup: { tabs: [{ name: "a", panes: [{ type: "agent", agent: "codex", args: "-q" }] }] } })]);
   press(v, cx, "e", { alt: true }); v.showSection("startup");

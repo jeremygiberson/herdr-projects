@@ -516,3 +516,26 @@ test("tabPlan treats the empty direction normalize fills in as unset: down", () 
   const side = tabsForLaunch(p, [{ name: "two", panes: [{ type: "agent" }, { type: "shell" }] }], "two");
   assert.equal(tabPlan(side)[0].panes[1].direction, "down");
 });
+
+// ---- final review fixes ----
+
+test("tabPlan names only a tab's first agent pane agent; a later unnamed one is pane<N>", () => {
+  const plan = tabPlan([{ name: "a", panes: [{ type: "agent", agent: "claude" }, { type: "agent", agent: "codex", direction: "right" }] }]);
+  assert.deepEqual(plan[0].panes.map((x) => x.name), ["agent", "pane2"]);
+});
+
+test("normalize skips blank legacy string tabs", () => {
+  const p = normalize({ path: "/a", startup: { agent: "claude", tabs: ["", "  ", "lazygit"] } });
+  assert.deepEqual(p.startup.tabs.map((t) => t.name), ["agent", "lazygit"]);
+});
+
+test("normalize drops a tab's command when it has panes", () => {
+  const p = normalize({ path: "/a", startup: { tabs: [{ name: "x", command: "top", panes: [{ type: "shell" }] }] } });
+  assert.equal(p.startup.tabs[0].command, "");
+  assert.equal(p.startup.tabs[0].panes.length, 1);
+  assert.doesNotThrow(() => tabPlan(p.startup.tabs));
+});
+
+test("normalize treats a startup that is not an object as absent", () => {
+  for (const startup of ["claude", 3, null]) assert.equal(normalize({ path: "/a", startup }).startup.tabs[0].name, "shell");
+});

@@ -131,7 +131,11 @@ export const blankPane = (over = {}) => ({ name: "", type: "shell", command: "",
 
 // A stored pane with its fields filled; a pane with a command and no type is a command pane.
 const fillPane = (x) => blankPane({ ...x, type: x?.type ?? (String(x?.command ?? "").trim() ? "command" : "shell") });
-const fillTab = (t) => ({ ...t, name: t?.name ?? "", folder: t?.folder ?? "", command: t?.command ?? "", panes: Array.isArray(t?.panes) ? t.panes.map(fillPane) : [] });
+// A tab with panes has no command (a hand-edited one may hold both).
+const fillTab = (t) => {
+  const panes = Array.isArray(t?.panes) ? t.panes.map(fillPane) : [];
+  return { ...t, name: t?.name ?? "", folder: t?.folder ?? "", command: panes.length ? "" : t?.command ?? "", panes };
+};
 
 const LEGACY_STARTUP_KEYS = ["agent", "args", "prompt", "promptMode", "layout"];
 
@@ -143,7 +147,9 @@ function upgradeStartup(su, layouts) {
     : blankPane({ type: "shell", name: "agent" });
   const layout = su.layout ? allLayouts(layouts).find((l) => l.name === su.layout && Array.isArray(l.panes)) : null;
   const panes = layout ? [{ ...first, name: layout.panes[0]?.name ?? "agent" }, ...layout.panes.slice(1).map(fillPane)] : [first];
-  const rest = (Array.isArray(su.tabs) ? su.tabs : []).map((t) => (typeof t === "string" ? { name: commandName(t), command: t, panes: [] } : t));
+  const rest = (Array.isArray(su.tabs) ? su.tabs : [])
+    .filter((t) => typeof t !== "string" || t.trim())
+    .map((t) => (typeof t === "string" ? { name: commandName(t), command: t.trim(), panes: [] } : t));
   return [{ name: "agent", folder: "", command: "", panes }, ...rest].map(fillTab);
 }
 
@@ -151,7 +157,7 @@ function upgradeStartup(su, layouts) {
  *  `layouts` are the file's own layouts, used only to expand an old `startup.layout`. */
 export function normalize(p, layouts = []) {
   const b = blankProject(p?.path ?? "");
-  const su = p?.startup ?? {};
+  const su = p?.startup && typeof p.startup === "object" && !Array.isArray(p.startup) ? p.startup : {};
   const legacy = LEGACY_STARTUP_KEYS.some((k) => k in su) || (Array.isArray(su.tabs) && su.tabs.some((t) => typeof t === "string"));
   const startup = { ...b.startup, ...su };
   for (const k of LEGACY_STARTUP_KEYS) delete startup[k];
@@ -228,9 +234,11 @@ export function tabPlan(tabs) {
     if (command && given.length) throw new Error(`Tab "${name}": a tab has either a command or panes, not both`);
     const list = given.length ? given : [command ? { type: "command", command } : { type: "shell" }];
     const seen = [];
+    // Only the tab's first agent pane defaults to "agent"; a later unnamed one is pane<N> like the rest.
+    const firstAgentAt = list.findIndex((x) => x?.type === "agent");
     const panes = list.map((x, i) => {
       const type = x?.type ?? (String(x?.command ?? "").trim() ? "command" : "shell");
-      const pname = String(x?.name ?? "").trim() || (type === "agent" ? "agent" : `pane${i + 1}`);
+      const pname = String(x?.name ?? "").trim() || (type === "agent" && i === firstAgentAt ? "agent" : `pane${i + 1}`);
       if (seen.includes(pname)) throw new Error(`Tab "${name}": two panes are called "${pname}"`);
       if (!["agent", "shell", "command"].includes(type)) throw new Error(`Tab "${name}": pane "${pname}" has an unknown type "${x.type}"`);
       const cmd = type === "command" ? String(x.command ?? "").trim() : "";
