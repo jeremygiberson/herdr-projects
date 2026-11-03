@@ -1,0 +1,6 @@
+{
+  "global": {
+    "ctrl-alt-p": "mod.open:projects",
+    "cmd-alt-p": "mod.open:projects"
+  }
+}
