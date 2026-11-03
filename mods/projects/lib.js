@@ -204,21 +204,27 @@ export function resolveFolder(base, text, home, env = {}) {
 }
 
 /** The tabs to launch: the project's own for no layout (`pick` "" or null); a layout with `tabs` replaces them; a layout with
- *  only `panes` replaces tab 1's panes. An agent pane left empty by a layout takes the project's first agent, else is a shell. */
+ *  only `panes` replaces the panes of the tab holding the project's first agent (tab 1 when it has none). An agent pane left
+ *  empty by a layout takes the project's first agent, else is a shell (a tab's first such one keeps the name "agent", so a
+ *  `from: "agent"` still finds it). */
 export function tabsForLaunch(project, layouts, pick) {
   const own = project.startup.tabs;
   if (!pick) return own;
   const layout = allLayouts(layouts).find((l) => l.name === pick);
   if (!layout) throw new Error(`No layout called "${pick}"`);
+  const lead = firstAgent(own);
+  const at = lead?.tab ?? 0;
   const tabs = Array.isArray(layout.tabs)
     ? layout.tabs.map(fillTab)
-    : [{ ...own[0], command: "", panes: layout.panes.map(fillPane) }, ...own.slice(1)];
-  const src = firstAgent(own)?.pane;
+    : own.map((t, i) => (i === at ? { ...t, command: "", panes: layout.panes.map(fillPane) } : t));
+  const src = lead?.pane;
   return tabs.map((t) => ({
     ...t,
-    panes: t.panes.map((x) => {
+    panes: t.panes.map((x, i) => {
       if (x.type !== "agent" || x.agent.trim()) return x;
-      return src ? { ...x, agent: src.agent, args: src.args, prompt: src.prompt, promptMode: src.promptMode } : { ...x, type: "shell" };
+      if (src) return { ...x, agent: src.agent, args: src.args, prompt: src.prompt, promptMode: src.promptMode };
+      const firstOfTab = t.panes.findIndex((y) => y.type === "agent") === i;
+      return { ...x, type: "shell", name: x.name || (firstOfTab ? "agent" : "") };
     }),
   }));
 }
@@ -259,7 +265,7 @@ export function tabPlan(tabs) {
 }
 
 // ---- pane layouts -----------------------------------------------------------------------------
-// A layout is the panes of a project's first tab: the first one runs the agent, each next one is
+// A layout is the panes of the tab holding a project's agent: the first one runs the agent, each next one is
 // split off an earlier pane. { name, label?, panes: [{ name?, type: "agent"|"shell"|"command",
 // command?, direction: "right"|"down", from? }] }. `from` names the pane to split (default: the
 // previous one). Sizes are not set: herdr splits evenly.

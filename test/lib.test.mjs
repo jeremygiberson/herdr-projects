@@ -524,6 +524,21 @@ test("tabPlan names only a tab's first agent pane agent; a later unnamed one is 
   assert.deepEqual(plan[0].panes.map((x) => x.name), ["agent", "pane2"]);
 });
 
+test("a layout's agent pane on a project with no agent becomes a shell still called agent, so from: agent works", () => {
+  const p = normalize({ path: "/r/x", startup: { tabs: [{ name: "shell" }] } });
+  const tabs = tabsForLaunch(p, [{ name: "two", panes: [{ type: "agent" }, { type: "shell", direction: "down", from: "agent" }] }], "two");
+  assert.deepEqual(tabPlan(tabs)[0].panes.map((x) => [x.name, x.type]), [["agent", "shell"], ["pane2", "shell"]]);
+});
+
+test("a panes layout replaces the panes of the tab that holds the agent", () => {
+  const p = normalize({ path: "/r/x", startup: { tabs: [{ name: "web", command: "npm run dev" }, { name: "ai", panes: [{ type: "agent", agent: "claude" }] }] } });
+  const tabs = tabsForLaunch(p, [], "agent-terminal");
+  assert.deepEqual(tabs[0], p.startup.tabs[0]);
+  assert.deepEqual(tabs[1].panes.map((x) => [x.type, x.agent]), [["agent", "claude"], ["shell", ""]]);
+  assert.equal(tabs[1].name, "ai");
+  assert.doesNotThrow(() => tabPlan(tabs));
+});
+
 test("normalize skips blank legacy string tabs", () => {
   const p = normalize({ path: "/a", startup: { agent: "claude", tabs: ["", "  ", "lazygit"] } });
   assert.deepEqual(p.startup.tabs.map((t) => t.name), ["agent", "lazygit"]);
