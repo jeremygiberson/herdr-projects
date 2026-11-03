@@ -45,6 +45,15 @@ export class InputState {
 }
 export const Input = { new: (state) => make("input", state) };
 
+export class TextareaState extends InputState {
+  constructor(o = {}) { super(o); this.rows = o.rows; }
+  static new(o) { return new TextareaState(o); }
+  set_rows(n) { this.rows = n; }
+  set_auto_grow(min, max) { this.grow = [min, max]; }
+  set_soft_wrap() {}
+}
+export const Textarea = { new: (state) => make("textarea", state) };
+
 /** All the text under an element, in order. */
 export function textOf(el) {
   if (el == null) return "";

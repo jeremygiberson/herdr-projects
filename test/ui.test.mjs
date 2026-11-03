@@ -17,8 +17,8 @@ beforeEach(reset);
 
 const mods = (o = {}) => ({ control: false, alt: false, platform: false, shift: false, ...o });
 const press = (v, cx, key, m) => v.keys({ key, modifiers: mods(m) }, cx);
-// Enter reaches the picker through the search box's (or the name box's) submit event, not the key handler.
-const enter = (v) => (v.mode === "name" ? v.nameInput : v.search).emit("submit");
+// Enter reaches the picker through the search box's submit event, not the key handler; on the launch screen it launches.
+const enter = (v) => (v.mode === "launch" ? v.launchNow() : v.search.emit("submit"));
 const CTRL_ALT = { control: true, alt: true };
 
 /** A picker with these projects (and layouts) in its data file, loaded and rendered once. */
@@ -170,17 +170,17 @@ test("the lit layout picture gets an accent ring for a second after a change", a
   assert.equal(litChip().op("border_color")[0], "#solid");
 });
 
-test("the layout key also works at the branch-name step", async () => {
+test("the layout key also works on the launch screen", async () => {
   const dir = makeRepo({ name: "Ada" });
   const { v, cx } = await open([proj("a", dir, { worktree: { mode: "ask", branchTemplate: "{user}/{slug}" } })], LAYOUTS);
   enter(v);
-  assert.equal(v.mode, "name");
+  assert.equal(v.mode, "launch");
   press(v, cx, "l", CTRL_ALT);
   assert.equal(v.layoutPick, "agent-terminal", "the first step from the project's tabs");
   for (let i = 0; i < 3; i++) press(v, cx, "l", CTRL_ALT);
   assert.equal(v.layoutPick, null, "all the way round: back at the project's own, so not a pick");
   const t = texts(v);
-  assert.ok(t.includes("Enter") && t.includes("creates") && t.includes("Esc") && t.includes("Layout"));
+  assert.ok(t.includes("ctrl+⏎") && t.includes("launches") && t.includes("Esc") && t.includes("Layout"));
   press(v, cx, "escape");
   assert.equal(v.mode, "list");
 });
@@ -191,7 +191,8 @@ test("the layout key also works at the branch-name step", async () => {
 async function launchFirst(projects, layouts, beforeEnter) {
   const { v, cx } = await open(projects, layouts);
   beforeEnter?.(v, cx);
-  enter(v);
+  enter(v); // opens the launch screen
+  enter(v); // launches with what it offers
   await cx.settle();
   return { v, cx };
 }
@@ -258,12 +259,12 @@ test("an 'always' project makes a worktree and opens a space named for it", asyn
   assert.ok(existsSync(spaceNew()[0].args.folder));
 });
 
-test("an 'ask' project asks for a name, previews the branch, and creates it on Enter", async () => {
+test("an 'ask' project's launch screen asks for a name, previews the branch, and creates it on Enter in the branch box", async () => {
   const dir = makeRepo({ name: "Ada" });
   const root = scratch("pp-ui-wt");
   const { v, cx } = await open([proj("demo", dir, { worktree: { mode: "ask", branchTemplate: "{user}/{slug}", root: `${root}/{branch}` } })]);
   enter(v);
-  assert.equal(v.mode, "name");
+  assert.equal(v.mode, "launch");
   v.nameInput.set_value("fix login");
   v.refreshPreview(cx);
   await cx.settle();
@@ -278,6 +279,7 @@ test("Shift+Enter opens the checkout whatever the mode", async () => {
   const dir = makeRepo();
   const { v, cx } = await open([proj("demo", dir, { worktree: { mode: "always" } })]);
   press(v, cx, "enter", { shift: true });
+  v.launchNow();
   await cx.settle();
   assert.equal(spaceNew()[0].args.folder, dir);
 });
@@ -286,7 +288,7 @@ test("an already-open space is focused instead of opening another", async () => 
   const dir = makeRepo();
   const { v, cx } = await open([proj("demo", dir, { worktree: { mode: "never" } })]);
   state.spaces = [{ id: "sp-open", folder: dir, machine: null }];
-  enter(v);
+  enter(v); enter(v); // the launch screen, then launch
   await cx.settle();
   assert.deepEqual(state.runs.map((r) => r.command), ["space.select"]);
   assert.equal(state.closed, 1);
@@ -300,7 +302,7 @@ test("a space opened in a folder below the project's is its space: focused on En
   assert.equal(v.rows().find((r) => r.p.name === "demo").space?.id, "sp-web");
   assert.equal(v.rows().find((r) => r.p.name === "other").space, undefined, "a sibling sharing a prefix is not its space");
   v.at = v.rows().findIndex((r) => r.p.name === "demo");
-  enter(v);
+  enter(v); enter(v); // the launch screen, then launch
   await cx.settle();
   assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["space.select", "sp-web"]]);
 });
@@ -670,7 +672,7 @@ test("panes chosen from a layout in the editor are saved and built on the next o
   await v.save(cx);
   assert.equal(v.error, null);
   assert.deepEqual(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.tabs[0].panes.map((x) => [x.type, x.direction]), [["agent", ""], ["shell", "down"]]);
-  enter(v);
+  enter(v); enter(v); // the launch screen, then launch
   await cx.settle();
   assert.equal(state.splits.length, 1);
   assert.equal(state.splits[0].direction, "down");
@@ -796,6 +798,8 @@ test("the Open and Checkout buttons in the card start the project", async () => 
   const { v, cx } = await open([proj("demo", dir, { worktree: { mode: "always" } })]);
   const button = (id) => findAll(rendered(v), (e) => e.op?.("id")?.[0] === id)[0];
   button("pp-checkout").op("on_click")[0]();
+  assert.equal(v.launch.worktree, false, "the launch screen opens on the checkout");
+  button("pp-launch").op("on_click")[0]({}, cx);
   await cx.settle();
   assert.equal(spaceNew()[0].args.folder, dir);
   assert.equal(state.closed, 1);
@@ -846,7 +850,7 @@ test("the card shows the description when there is one", async () => {
 test("Enter builds the project's tabs: later tabs through herdr-app do tab.new", async () => {
   const dir = realpathSync(makeRepo()); mkdirSync(join(dir, "web"));
   const { v, cx } = await open([proj("shop", dir, { worktree: { mode: "never" }, startup: { tabs: [{ name: "a", command: "" }, { name: "web", folder: "web", command: "npm run dev" }] } })]);
-  enter(v); await cx.settle();
+  enter(v); enter(v); await cx.settle(); // the launch screen, then launch
   assert.deepEqual(state.tabsMade.map((t) => t.name), ["web"]);
 });
 
@@ -892,7 +896,7 @@ test("the layout key and Enter still work with the card hidden", async () => {
   press(v, cx, "i", CTRL_ALT);
   for (let i = 0; i < 3; i++) press(v, cx, "l", CTRL_ALT); // agent-terminal, side, coding
   assert.equal(v.layoutPick, "coding");
-  enter(v);
+  enter(v); enter(v); // the launch screen, then launch
   await cx.settle();
   assert.equal(state.splits.length, 1);
   assert.equal(state.splits[0].direction, "right");
@@ -1571,7 +1575,7 @@ test("opening a new worktree copies the listed files, runs worktree and startup 
   const dir = realpathSync(makeRepo()); writeFileSync(join(dir, ".env"), "A=1\n");
   const root = scratch("pp-wt");
   const { v, cx } = await open([proj("api", dir, { worktree: { mode: "always", copy: [".env"], setup: ["npm ci"], branchTemplate: "{slug}", root: `${root}/{branch}` }, startup: { setup: ["echo hi"], agentTiming: "after", ...AG("claude") } })]);
-  enter(v); await cx.settle();
+  enter(v); enter(v); await cx.settle(); // the launch screen, then launch
   const wt = state.runs.find((r) => r.command === "space.new").args.folder;
   assert.equal(readFileSync(join(wt, ".env"), "utf8"), "A=1\n");
   const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
@@ -1583,7 +1587,7 @@ test("a worktree that already carries the marker gets only the startup setup: no
   const dir = realpathSync(makeRepo()); const wt = join(scratch("pp-wt"), "w"); sh(dir, "worktree", "add", "-q", wt, "-b", "w");
   writeFileSync(join(wt, ".projects-setup-done"), ""); writeFileSync(join(dir, ".env"), "A=1\n");
   const { v, cx } = await open([proj("wt", wt, { worktree: { mode: "never", copy: [".env"], setup: ["echo X"] }, startup: { setup: ["echo Y"], agentTiming: "after", ...AG("claude") } })]);
-  enter(v); await cx.settle();
+  enter(v); enter(v); await cx.settle(); // the launch screen, then launch
   const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
   assert.match(line, /echo Y && exec/); assert.doesNotMatch(line, /echo X|touch/);
   assert.equal(existsSync(join(wt, ".env")), false);
@@ -1591,7 +1595,7 @@ test("a worktree that already carries the marker gets only the startup setup: no
 test("quickSetup runs the steps inline before the agent and passes no chain", async () => {
   const dir = realpathSync(makeRepo());
   const { v, cx } = await open([proj("api", dir, { worktree: { mode: "never" }, startup: { setup: ["touch ran.txt"], quickSetup: true, agentTiming: "after", ...AG("claude") } })]);
-  enter(v); await cx.settle();
+  enter(v); enter(v); await cx.settle(); // the launch screen, then launch
   assert.equal(existsSync(join(dir, "ran.txt")), true);
   assert.deepEqual(state.runs.find((r) => r.command === "space.new").args.argv, ["claude"]);
   assert.ok(v.notes.some((n) => n === "$ touch ran.txt"));
@@ -1607,12 +1611,68 @@ test("quickSetup on a new worktree marks it too, so the worktree setup runs once
   const dir = realpathSync(makeRepo()); const root = scratch("pp-wt");
   const over = (path, mode) => proj("api", path, { worktree: { mode, setup: ["touch wt.txt"], branchTemplate: "{slug}", root: `${root}/{branch}` }, startup: { setup: ["touch st.txt"], quickSetup: true, agentTiming: "after", ...AG("claude") } });
   let { v, cx } = await open([over(dir, "always")]);
-  enter(v); await cx.settle();
+  enter(v); enter(v); await cx.settle();
   const wt = state.runs.find((r) => r.command === "space.new").args.folder;
   for (const f of ["wt.txt", "st.txt", ".projects-setup-done"]) assert.equal(existsSync(join(wt, f)), true, f);
   rmSync(join(wt, "wt.txt")); rmSync(join(wt, "st.txt"));
   ({ v, cx } = await open([over(wt, "never")]));
-  enter(v); await cx.settle();
+  enter(v); enter(v); await cx.settle();
   assert.equal(existsSync(join(wt, "st.txt")), true);
   assert.equal(existsSync(join(wt, "wt.txt")), false);
+});
+
+// ---------------------------------------------------------------- the launch screen
+
+test("Enter on an ask project opens the launch screen with Open as Worktree, the prompt prefilled, and the project's timing", async () => {
+  const { v, cx } = await open([proj("api", realpathSync(makeRepo()), { startup: { agentTiming: "after", setup: ["npm ci"], ...AG("claude", { prompt: "hello" }) } })]);
+  enter(v); await cx.settle();
+  assert.equal(v.mode, "launch");
+  assert.deepEqual([v.launch.worktree, v.launch.agentTiming, v.promptBox.value()], [true, "after", "hello"]);
+  const t = texts(v);
+  for (const s of ["Open · api", "Worktree", "Checkout", "Branch", "Prompt", "Agent: after setup", "Launch"]) assert.ok(t.includes(s), s);
+});
+test("the launch screen launches with what was chosen: checkout, a typed prompt, timing toggled", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "never" }, startup: { setup: ["true"], agentTiming: "after", ...AG("claude") } })]);
+  enter(v); await cx.settle();
+  v.promptBox.set_value("do the thing"); press(v, cx, "t", CTRL_ALT);
+  assert.equal(v.launch.agentTiming, "with");
+  v.launchNow(); await cx.settle();
+  const sn = state.runs.find((r) => r.command === "space.new").args;
+  assert.deepEqual([sn.argv, sn.task], [["claude"], "do the thing"]);
+});
+test("an empty prompt starts the agent bare", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "never" }, startup: AG("claude", { prompt: "hello" }) })]);
+  enter(v); await cx.settle(); v.promptBox.set_value(""); v.launchNow(); await cx.settle();
+  const sn = state.runs.find((r) => r.command === "space.new").args;
+  assert.deepEqual([sn.argv, sn.task, state.sent.length], [["claude"], undefined, 0]);
+});
+test("a project with no setup commands hides the Agent row and launches with", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "never" }, startup: { agentTiming: "after", ...AG("claude") } })]);
+  enter(v); await cx.settle();
+  assert.doesNotMatch(texts(v), /Agent: /);
+  v.launchNow(); await cx.settle();
+  assert.deepEqual(state.runs.find((r) => r.command === "space.new").args.argv, ["claude"]);
+});
+test("quickLaunch skips the screen for always and never modes but not for ask", async () => {
+  const dir = realpathSync(makeRepo()); const root = scratch("pp-wt");
+  const mk = (name, mode) => proj(name, dir, { quickLaunch: true, worktree: { mode, root: `${root}/{branch}` }, startup: AG("claude") });
+  const { v, cx } = await open([mk("never", "never"), mk("always", "always"), mk("ask", "ask")]);
+  for (const [name, expected] of [["never", "busy"], ["always", "busy"], ["ask", "launch"]]) {
+    v.search.set_value(name); v.at = 0; enter(v); await cx.settle();
+    assert.equal(v.mode, expected, name);
+    v.mode = "list"; reset(); // next project; a fresh stub state for each launch
+  }
+});
+test("the demo view launch-screen opens the screen", async () => {
+  const { v } = await open([proj("api", realpathSync(makeRepo()))]);
+  v.applyDemo({ view: "launch-screen", project: "api" });
+  assert.equal(v.mode, "launch");
+});
+test("Shift+Enter on the list opens the launch screen on the checkout path", async () => {
+  const { v, cx } = await open([proj("api", realpathSync(makeRepo()), { worktree: { mode: "ask" } })]);
+  press(v, cx, "enter", { shift: true }); await cx.settle();
+  assert.deepEqual([v.mode, v.launch.worktree], ["launch", false]);
 });

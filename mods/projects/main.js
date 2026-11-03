@@ -4,7 +4,7 @@
 // never passes that key to the mod, so Esc can only close the picker.
 
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
 import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec } from "herdr";
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
 import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
@@ -134,7 +134,7 @@ export default class ProjectPresets extends View {
   fail(where, e) {
     logError(where, e);
     this.error = `${where}: ${e?.message ?? e}`;
-    if (this.mode === "name") this.mode = "list";
+    if (this.mode === "launch") this.mode = "list";
     this.cx?.notify();
   }
 
@@ -220,13 +220,13 @@ export default class ProjectPresets extends View {
       this.openBackup();
       if (d.text) this.backupPath.set_value(d.text);
       if (d.note) this.backupNote = { text: d.note, bad: Boolean(d.bad) };
-    } else if (d.view === "launch") this.activate(false); // Enter on the named project, for checking a launch in the app
-    else if (d.view === "delete") this.pendingDelete = project;
-    else if (d.view === "name") {
-      this.target = project;
-      this.askName(project);
-      this.nameInput.set_value(d.text ?? "");
-      this.cx.timer.after(600, () => this.refreshPreview(this.cx));
+    } else if (d.view === "launch") { // launches the named project at once with its defaults, for checking a launch in the app
+      if (project) { this.target = project; this.start(project, { worktree: project.worktree.mode !== "never" }); }
+    } else if (d.view === "delete") this.pendingDelete = project;
+    else if (d.view === "launch-screen" && project) {
+      this.openLaunch(project, { mainOnly: Boolean(d.mainOnly) });
+      if (d.text != null && this.nameInput) { this.nameInput.set_value(d.text); this.cx.timer.after(600, () => this.refreshPreview(this.cx)); }
+      if (d.prompt != null) this.promptBox.set_value(d.prompt);
     } else if (d.view === "worktrees") {
       this.afterWt = () => { if (d.tick) this.selectMerged(); if (d.confirm) this.wtConfirm = true; };
       this.openWorktrees();
@@ -357,7 +357,7 @@ export default class ProjectPresets extends View {
   footer(t, p, list) {
     const hints = list
       ? [["Enter", "opens"], ["Shift+Enter", "checkout"], [key("n"), "add"], [key("u"), "duplicate"], [key("x"), "import/export"], [key("e"), "edit"], [key("w"), "worktrees"], [key("d"), "delete"], [LAYOUT_HINT(), "layout"], [DETAIL_HINT(), "details"]]
-      : [["Enter", "creates"], [backKey(), "back"], ["Esc", "closes"]];
+      : [["ctrl+⏎", "launches"], [backKey(), "back"], ["Esc", "closes"]];
     const current = this.layoutNameFor(p);
     const lit = this.layoutLit;
     const choice = (name, label) => {
@@ -406,25 +406,62 @@ export default class ProjectPresets extends View {
     return row.children(highlightRuns(name, at).map((r) => r.hit ? div().font_bold().text_color(t.accent).child(r.text) : div().child(r.text)));
   }
 
-  /** Enter (mainOnly false) follows the project's worktree mode; Shift+Enter opens the checkout itself. */
+  /** Enter (mainOnly false) opens the launch screen on a new worktree (a checkout for a `never` project); Shift+Enter
+   *  opens it on the checkout. A quickLaunch project skips the screen unless it would ask for a branch name. */
   activate(mainOnly) {
     const r = this.selected();
     if (!r || this.mode !== "list") return;
-    if (r.p.template) return this.duplicateSelected(); // a template has no folder to open: Enter makes a project from it
-    this.target = r.p;
-    const mode = mainOnly ? "never" : r.p.worktree.mode;
-    if (mode === "ask") return this.askName(r.p);
-    this.start(r.p, { worktree: mode === "always" });
+    const p = r.p;
+    if (p.template) return this.duplicateSelected(); // a template has no folder to open: Enter makes a project from it
+    this.target = p;
+    if (p.quickLaunch && (mainOnly || p.worktree.mode !== "ask")) return this.start(p, { worktree: !mainOnly && p.worktree.mode !== "never" });
+    this.openLaunch(p, { mainOnly });
   }
 
-  askName(p) {
-    this.mode = "name";
+  /** The launch screen: open as worktree or checkout, branch, first prompt, agent timing, layout. Makes host
+   *  objects, so it runs from an event, never from render. */
+  openLaunch(p, { mainOnly = false } = {}) {
+    this.target = p;
+    this.mode = "launch";
+    this.error = null;
+    this.launch = { worktree: !mainOnly && p.worktree.mode !== "never", agentTiming: p.startup.agentTiming };
+    this.nameInput = null;
     this.preview = "";
+    if (this.launch.worktree) this.makeNameInput();
+    this.promptBox = TextareaState.new({ placeholder: "First prompt (optional)", value: firstAgent(p.startup.tabs)?.pane.prompt ?? "", rows: 3 });
+    this.promptBox.set_auto_grow(3, 8);
+    // No `submit` handler: the box fires it on every Enter, which also types a newline. ctrl+Enter launches (see keys).
+    (this.nameInput ?? this.promptBox).focus();
+  }
+
+  makeNameInput() {
     this.nameInput = InputState.new({ placeholder: "branch name, e.g. fix login (empty: use the time)" });
     this.nameInput.on("change", (_e, cx) => this.refreshPreview(cx));
-    this.nameInput.on("submit", () => this.start(p, { worktree: true, branchText: this.nameInput.value() }));
-    this.nameInput.focus();
+    this.nameInput.on("submit", () => this.launchNow());
     this.refreshPreview(this.cx);
+  }
+
+  /** Open as Worktree or Checkout. */
+  setOpenAs(worktree) {
+    this.launch.worktree = worktree;
+    if (worktree && !this.nameInput) this.makeNameInput();
+    else if (worktree) this.refreshPreview(this.cx);
+  }
+
+  /** Whether this launch runs setup commands, so the agent can start after them. */
+  launchHasSetup() {
+    const p = this.target;
+    return p.startup.setup.length > 0 || (this.launch.worktree && p.worktree.setup.length > 0);
+  }
+
+  launchNow() {
+    if (this.mode !== "launch") return; // the branch box's submit and ctrl+Enter can both arrive
+    this.start(this.target, {
+      worktree: this.launch.worktree,
+      branchText: this.launch.worktree ? (this.nameInput?.value() ?? "") : "",
+      prompt: this.promptBox.value().trim(),
+      agentTiming: this.launchHasSetup() ? this.launch.agentTiming : "with",
+    });
   }
 
   refreshPreview(cx) {
@@ -1054,7 +1091,12 @@ export default class ProjectPresets extends View {
       else if (k === "i" && layoutMod) this.toggleDetail();
       else if (k === "e" && mod) this.editSelected();
       else return;
-    } else if (this.mode === "name" && k === "l" && layoutMod) this.cycleLayout(this.target);
+    } else if (this.mode === "launch") {
+      if (k === "l" && layoutMod) this.cycleLayout(this.target);
+      else if (k === "t" && layoutMod && this.launchHasSetup()) this.launch.agentTiming = this.launch.agentTiming === "after" ? "with" : "after";
+      else if (k === "enter" && ctrl) { this.handled = Date.now(); this.launchNow(); }
+      else return;
+    }
     else if (this.mode === "worktrees") {
       const n = this.wtRows().length;
       if (k === "down" && n) { this.wtAt = (this.wtAt + 1) % n; this.reveal("pp-worktrees", this.wtScroll, this.wtAt); }
@@ -1079,7 +1121,7 @@ export default class ProjectPresets extends View {
     this.frame = { rows: this.mode === "list" ? this.rows() : [] };
     let body;
     try {
-      body = { list: () => this.renderList(t, cx), edit: () => this.renderEdit(t, cx), worktrees: () => this.renderWorktrees(t, cx), backup: () => this.renderBackup(t, cx), name: () => this.renderName(t), busy: () => this.renderBusy(t) }[this.mode]();
+      body = { list: () => this.renderList(t, cx), edit: () => this.renderEdit(t, cx), worktrees: () => this.renderWorktrees(t, cx), backup: () => this.renderBackup(t, cx), launch: () => this.renderLaunch(t, cx), busy: () => this.renderBusy(t) }[this.mode]();
     } finally {
       this.frame = null;
     }
@@ -1345,15 +1387,34 @@ export default class ProjectPresets extends View {
         .child(this.button(t, "pp-wt-remove", this.wtConfirm ? `Click again to remove ${count}` : `Remove ${count} ticked`, count > 0, () => { this.removeSelected(); cx.notify(); })));
   }
 
-  renderName(t) {
-    const p = this.target;
+  /** The launch screen: flat rows of a label and its control. */
+  renderLaunch(t, cx) {
+    const p = this.target, l = this.launch;
+    const row = (label, control) => h_flex().gap(10).items_start()
+      .child(div().w(64).flex_none().pt(8).text_size(12).text_color(t.dim).child(label))
+      .child(v_flex().flex_1().min_w(0).gap(4).child(control));
+    const note = (text) => div().text_size(FOOTER_SIZE).text_color(t.dim).child(text);
+    const openAs = (worktree) => () => { this.setOpenAs(worktree); cx.notify(); };
+    const setup = this.launchHasSetup();
     return v_flex().gap(10)
-      .child(this.title(t, `New worktree · ${p.name}`, `${backKey()} back · Esc closes`))
-      .child(h_flex().h(36).px(10).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
-        .child(Input.new(this.nameInput).flex_1().h_full().text_size(12.8).text_color(t.foreground)))
-      .child(div().text_size(12).text_color(this.error ? t.blocked : t.dim).child(this.error ?? (this.preview ? `branch: ${this.preview}` : "")))
-      .child(div().text_size(FOOTER_SIZE).text_color(t.dim).child(`from ${p.git.remote}/${p.git.base}${p.git.fetch ? " after a fetch" : ""} · Enter to create`))
-      .child(this.footer(t, p, false));
+      .child(this.title(t, `Open · ${p.name}`, `${backKey()} back · Esc closes`))
+      .child(row("Open as", h_flex().gap(8)
+        .child(this.button(t, "pp-open-worktree", "Worktree", l.worktree, openAs(true)))
+        .child(this.button(t, "pp-open-checkout", "Checkout", !l.worktree, openAs(false)))))
+      .when(l.worktree && Boolean(this.nameInput), (el) => el.child(row("Branch", v_flex().gap(4)
+        .child(h_flex().h(36).px(10).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
+          .child(Input.new(this.nameInput).flex_1().h_full().text_size(12.8).text_color(t.foreground)))
+        .child(div().text_size(12).text_color(this.error ? t.blocked : t.dim).child(this.error ?? (this.preview ? `branch: ${this.preview}` : "")))
+        .child(note(`from ${p.git.remote}/${p.git.base}${p.git.fetch ? " after a fetch" : ""} · Enter launches`)))))
+      .child(row("Prompt", v_flex().gap(4)
+        .child(div().px(10).py(6).rounded(9).border_1().border_color(t.input).bg(t.background)
+          .child(Textarea.new(this.promptBox).w_full().text_size(12.8).text_color(t.foreground)))
+        .child(note("Enter: newline · ctrl+⏎ launches"))))
+      .when(setup, (el) => el.child(row("Agent", h_flex().gap(8).items_center()
+        .child(this.button(t, "pp-timing-launch", l.agentTiming === "after" ? "Agent: after setup" : "Agent: with setup", false, () => { l.agentTiming = l.agentTiming === "after" ? "with" : "after"; cx.notify(); }))
+        .child(div().px(6).rounded(5).border_1().border_color(t.input).bg(t.raised).text_size(10.5).text_color(t.foreground).child(mac() ? "⌘⌥T" : "ctrl+alt+T")))))
+      .child(this.footer(t, p, false))
+      .child(h_flex().justify_end().child(this.button(t, "pp-launch", "Launch", true, () => { this.launchNow(); cx.notify(); })));
   }
 
   /** The busy screen's steps: done ones get a ✓, the current one a spinner (or a ✗ once it failed). */
