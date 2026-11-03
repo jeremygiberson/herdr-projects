@@ -250,6 +250,14 @@ test("after timing: the agent pane runs the chain and execs the agent with its a
   assert.ok(notes.includes("setup continues in the agent pane"));
   assert.equal(state.hcRuns.length, 0);
 });
+test("an agent pane's env lines go in front of its command through env", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "claude", args: "--model claude-sonnet-5-5", env: ["CLAUDE_CODE_DISABLE_1M_CONTEXT=1", "B=two words"] }] }] } });
+  await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "go", log: () => {} });
+  const sn = state.runs.find((r) => r.command === "space.new").args;
+  assert.deepEqual(sn.argv, ["env", "CLAUDE_CODE_DISABLE_1M_CONTEXT=1", "B=two words", "claude", "--model", "claude-sonnet-5-5"]);
+  assert.equal(sn.task, "go");
+});
 test("after timing with a send prompt starts the detached helper and does not wait or send", async () => {
   const dir = realpathSync(makeRepo());
   const p = normalize({ name: "S", path: dir, startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "hermes", promptMode: "send" }] }] } });

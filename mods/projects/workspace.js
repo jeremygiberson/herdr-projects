@@ -119,7 +119,8 @@ async function readEnv() {
 }
 
 /** The agent's command line (its name and arguments); empty for any other pane, or an agent pane with no agent. */
-const agentArgv = (pane) => (pane.type === "agent" ? [...splitArgs(pane.agent), ...splitArgs(pane.args)] : []);
+// An agent pane's command line; its env lines go in front through `env`, which execs the agent with them set.
+const agentArgv = (pane) => (pane.type === "agent" ? [...((pane.env ?? []).length ? ["env", ...pane.env] : []), ...splitArgs(pane.agent), ...splitArgs(pane.args)] : []);
 
 /** The reply of an `herdr-app do` call, or null when it failed (logged at `level`). */
 async function appDo(command, args, what, level = "error") {

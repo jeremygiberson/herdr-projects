@@ -41,7 +41,7 @@ Repos that are not projects can be covered by an `autoLayouts` list at the top l
 
 ## Projects file
 
-Projects live in `~/.config/herdr-app/data/projects.json`; the editor writes it, and you can edit it by hand. A project's `startup.tabs` is the list of tabs its space opens with. A tab has a `folder` (relative to the project or worktree, or absolute) and either a `command` or `panes`; a pane is an `agent`, a `shell` or a `command`, split `right` or `down` from the previous one, and its `folder` is relative to its tab's folder. Folders are checked before anything is created.
+Projects live in `~/.config/herdr-app/data/projects.json`; the editor writes it, and you can edit it by hand. A project's `agent` is what its agent panes run: a command, arguments, environment lines (`KEY=value`, set for the agent only), a default prompt (it prefills the launch screen) and how the prompt is delivered. Its `startup.tabs` is the list of tabs its space opens with. A tab has a `folder` (relative to the project or worktree, or absolute) and either a `command` or `panes`; a pane is an `agent`, a `shell` or a `command`, split `right` or `down` from the previous one, and its `folder` is relative to its tab's folder. An agent pane that names no `agent` of its own runs the project's agent; when the project names none either, the first installed agent. So picking "Agent + terminal right" on a project with only a terminal tab still starts an agent. Folders are checked before anything is created.
 
 ```json
 {
@@ -52,11 +52,12 @@ Projects live in `~/.config/herdr-app/data/projects.json`; the editor writes it,
       "spaceName": "{name} · {branch}", "repoSpace": false
     },
     "git": { "fetch": true, "remote": "origin", "base": "main", "fastForward": false },
+    "agent": { "command": "claude", "args": "--model claude-sonnet-5-5", "env": ["CLAUDE_CODE_DISABLE_1M_CONTEXT=1"], "prompt": "", "promptMode": "arg" },
     "startup": {
       "setup": ["docker compose up -d"],
       "tabs": [
         { "name": "agent", "panes": [
-            { "type": "agent", "agent": "claude", "args": "--model opus", "prompt": "", "promptMode": "arg" },
+            { "type": "agent" },
             { "type": "shell", "direction": "down" } ] },
         { "name": "web", "folder": "frontend", "command": "npm run dev" },
         { "name": "api", "folder": "backend", "panes": [ { "command": "make run" }, { "command": "psql shop", "direction": "right", "folder": "db" } ] },

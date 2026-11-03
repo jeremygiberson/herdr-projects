@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, matchAutoLayout, repoNameFromKey, tabsForAuto, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix, setupScript, inUserShell } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, matchAutoLayout, repoNameFromKey, tabsForAuto, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix, setupScript, inUserShell, fallbackAgent, badEnvLines } from "../mods/projects/lib.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -465,7 +465,7 @@ test("normalize: a legacy layout defined by the user expands, an unknown one lea
   assert.equal(normalize({ path: "/a", startup: { agent: "claude", layout: "nope" } }).startup.tabs[0].panes.length, 1);
 });
 test("normalize: a legacy plain shell with no layout is one shell tab; no startup at all is one shell tab", () => {
-  assert.deepEqual(normalize({ path: "/a", startup: { agent: "" } }).startup.tabs[0].panes, [{ name: "agent", type: "shell", command: "", agent: "", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "" }]);
+  assert.deepEqual(normalize({ path: "/a", startup: { agent: "" } }).startup.tabs[0].panes, [{ name: "agent", type: "shell", command: "", agent: "", args: "", env: [], prompt: "", promptMode: "arg", direction: "", from: "", folder: "" }]);
   assert.equal(normalize({ path: "/a" }).startup.tabs[0].name, "shell");
 });
 test("normalize fills a new-shape tab: neither command nor panes is a plain shell, panes: [] too", () => {
@@ -477,7 +477,7 @@ test("normalize fills a new-shape tab: neither command nor panes is a plain shel
 test("tabPlan fills names, directions and from, and turns a command tab into one pane", () => {
   const plan = tabPlan([{ name: "a", panes: [{ type: "agent", agent: "claude" }, { type: "shell" }, { type: "command", command: "top", direction: "right", from: "agent" }] }, { name: "b", command: "lazygit" }, { name: "c" }]);
   assert.deepEqual(plan[0].panes.map((x) => [x.name, x.direction, x.from]), [["agent", "", ""], ["pane2", "down", "agent"], ["pane3", "right", "agent"]]);
-  assert.deepEqual(plan[1].panes, [{ name: "pane1", type: "command", command: "lazygit", agent: "", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "" }]);
+  assert.deepEqual(plan[1].panes, [{ name: "pane1", type: "command", command: "lazygit", agent: "", args: "", env: [], prompt: "", promptMode: "arg", direction: "", from: "", folder: "" }]);
   assert.equal(plan[2].panes[0].type, "shell");
 });
 test("tabPlan names the problem", () => {
@@ -492,7 +492,7 @@ test("tabPlan names the problem", () => {
 test("tabsForLaunch: none keeps the project's tabs, a panes layout replaces tab 1's panes, a tabs layout replaces all; agent panes inherit the project's agent", () => {
   const p = normalize({ path: "/a", startup: { tabs: [{ name: "agent", panes: [{ type: "agent", agent: "codex", args: "-q" }] }, { name: "git", command: "lazygit" }] } });
   const layouts = [{ name: "side", panes: [{ type: "agent" }, { type: "shell", direction: "right" }] }, { name: "full", tabs: [{ name: "only", panes: [{ type: "agent" }] }] }];
-  assert.equal(tabsForLaunch(p, layouts, ""), p.startup.tabs);
+  assert.deepEqual(tabsForLaunch(p, layouts, ""), p.startup.tabs);
   const side = tabsForLaunch(p, layouts, "side");
   assert.deepEqual([side.length, side[0].panes.length, side[0].panes[0].agent, side[1].name], [2, 2, "codex", "git"]);
   const full = tabsForLaunch(p, layouts, "full");
@@ -508,7 +508,7 @@ test("firstAgent finds the first agent pane across tabs, or null", () => {
   assert.equal(firstAgent([]), null);
 });
 test("blankPane defaults every field and applies overrides", () => {
-  assert.deepEqual(blankPane({ type: "agent", agent: "claude" }), { name: "", type: "agent", command: "", agent: "claude", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "" });
+  assert.deepEqual(blankPane({ type: "agent", agent: "claude" }), { name: "", type: "agent", command: "", agent: "claude", args: "", env: [], prompt: "", promptMode: "arg", direction: "", from: "", folder: "" });
 });
 test("tabLabels marks split tabs with a pane count", () => {
   assert.deepEqual(tabLabels([{ name: "server", panes: [{}, {}] }, { name: "git", command: "lazygit", panes: [] }]), ["server ×2", "git"]);
@@ -553,6 +553,44 @@ test("a layout's agent pane on a project with no agent becomes a shell still cal
   assert.deepEqual(tabPlan(tabs)[0].panes.map((x) => [x.name, x.type]), [["agent", "shell"], ["pane2", "shell"]]);
 });
 
+test("normalize fills the project's agent block and drops blank env lines", () => {
+  assert.deepEqual(normalize({ path: "/a" }).agent, { command: "", args: "", env: [], prompt: "", promptMode: "arg" });
+  const p = normalize({ path: "/a", agent: { command: " claude ", args: "--model x", env: ["A=1", "", " B=2 "], prompt: "hi", promptMode: "send" } });
+  assert.deepEqual(p.agent, { command: "claude", args: "--model x", env: ["A=1", "B=2"], prompt: "hi", promptMode: "send" });
+  assert.equal(normalize({ path: "/a", agent: "claude" }).agent.command, "", "a string is not an agent block");
+});
+test("the project's agent fills an agent pane that names none, in its own tabs and in a picked layout, before the first named pane and the fallback", () => {
+  const agent = { command: "claude", args: "--model claude-sonnet-5-5", env: ["CLAUDE_CODE_DISABLE_1M_CONTEXT=1"], prompt: "start", promptMode: "arg" };
+  const p = normalize({ path: "/a", agent, startup: { tabs: [{ name: "ai", panes: [{ type: "agent" }] }] } });
+  const own = tabsForLaunch(p, [], "");
+  assert.deepEqual([own[0].panes[0].agent, own[0].panes[0].args, own[0].panes[0].env, own[0].panes[0].prompt], ["claude", "--model claude-sonnet-5-5", ["CLAUDE_CODE_DISABLE_1M_CONTEXT=1"], "start"]);
+  const side = tabsForLaunch(p, [], "agent-side-terminal", { agent: "codex", args: "" });
+  assert.deepEqual(side[0].panes.map((x) => [x.type, x.agent]), [["agent", "claude"], ["shell", ""]]);
+  const named = normalize({ path: "/a", agent, startup: { tabs: [{ name: "ai", panes: [{ type: "agent", agent: "codex", args: "-q" }] }] } });
+  assert.deepEqual(tabsForLaunch(named, [], "agent-terminal")[0].panes[0], { ...tabsForLaunch(named, [], "agent-terminal")[0].panes[0], agent: "claude", env: agent.env }, "the project's agent wins over a named pane for a layout's empty one");
+  assert.equal(tabsForLaunch(named, [], "")[0].panes[0].agent, "codex", "a pane that names its agent keeps it");
+});
+test("with no project agent, a picked agent layout runs the fallback agent, and a shell only when there is none", () => {
+  const p = normalize({ path: "/a", startup: { tabs: [{ name: "terminal", folder: "api" }] } });
+  const tabs = tabsForLaunch(p, [], "agent-side-terminal", { agent: "claude", args: "" });
+  assert.deepEqual(tabs[0].panes.map((x) => [x.type, x.agent, x.name]), [["agent", "claude", ""], ["shell", "", ""]]);
+  assert.equal(tabs[0].folder, "api", "the layout replaces the panes of tab 1, which keeps its folder");
+  assert.equal(tabsForLaunch(p, [], "agent-side-terminal", null)[0].panes[0].type, "shell");
+  assert.doesNotThrow(() => tabPlan(tabs));
+});
+test("fallbackAgent takes the file's defaultAgent, else the first installed agent, else nothing", () => {
+  const options = [{ key: "codex", run: ["codex"], installed: false }, { key: "claude", run: ["claude"], installed: true }, { key: "pi", run: ["pi"] }];
+  assert.deepEqual(fallbackAgent({ agent: "hermes", args: "-x" }, options), { agent: "hermes", args: "-x" });
+  assert.deepEqual(fallbackAgent(null, options), { agent: "claude", args: "" });
+  assert.deepEqual(fallbackAgent(null, [{ key: "codex", run: ["codex"], installed: false }]), null);
+  assert.deepEqual(fallbackAgent(null, []), null);
+});
+test("tabPlan keeps an agent pane's env and rejects a line that is not KEY=value; badEnvLines names them", () => {
+  const ok = tabPlan([{ name: "t", panes: [{ type: "agent", agent: "claude", env: ["A=1", "_B=x=y"] }] }]);
+  assert.deepEqual(ok[0].panes[0].env, ["A=1", "_B=x=y"]);
+  assert.throws(() => tabPlan([{ name: "t", panes: [{ type: "agent", agent: "claude", env: ["A=1", "1BAD=2"] }] }]), /pane "agent" has an env line that is not KEY=value: 1BAD=2/);
+  assert.deepEqual(badEnvLines(["A=1", "nope", "B"]), ["nope", "B"]);
+});
 test("a panes layout replaces the panes of the tab that holds the agent", () => {
   const p = normalize({ path: "/r/x", startup: { tabs: [{ name: "web", command: "npm run dev" }, { name: "ai", panes: [{ type: "agent", agent: "claude" }] }] } });
   const tabs = tabsForLaunch(p, [], "agent-terminal");

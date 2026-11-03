@@ -3,7 +3,7 @@
 // `autoLayouts` entry names, and builds the tabs into it. A space is considered once, when it first appears.
 import { spaces, agents, panes, shared, home, notify, machines } from "herdr";
 import { projectFolder, inspect, gitDir } from "./git.js";
-import { matchAutoLayout, tabsForAuto, blankProject, basename, repoNameFromKey } from "./lib.js";
+import { matchAutoLayout, tabsForAuto, blankProject, basename, repoNameFromKey, fallbackAgent } from "./lib.js";
 
 const OPENING = "projects.opening"; // { [folder]: when the picker started opening it }, written by buildWorkspace
 const OPENING_MS = 60000;
@@ -16,8 +16,9 @@ export class Watcher {
   /** The functions are injected (main.js passes the real ones, tests fakes); `log(level, message, data)` is log.js's.
    *  `active()`: whether this copy acts. Every launcher block's copy runs a watcher and a hidden one keeps ticking, so
    *  main.js passes one that is true only for the copy in the chosen slot. */
-  constructor({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active = () => true }) {
-    Object.assign(this, { loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active });
+  /** `agents` gives agentOptions' list (installed flags), for the fallback agent of a project pane that names none. */
+  constructor({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active = () => true, agents = () => [] }) {
+    Object.assign(this, { loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active, agents });
     this.seen = new Set();
     this.configWarned = false; // a bad data file is toasted once, then only logged
   }
@@ -103,7 +104,7 @@ export class Watcher {
       }
 
       const base = project ?? blankProject(folder);
-      const tabs = tabsForAuto({ project, layouts: config.layouts, entry, defaultAgent: config.defaultAgent });
+      const tabs = tabsForAuto({ project, layouts: config.layouts, entry, defaultAgent: config.defaultAgent, fallback: fallbackAgent(config.defaultAgent, this.agents()) });
       const say = (m) => this.log("debug", m);
       // quickSetup means "run setup inline on the picker's busy screen"; there is no such screen here, so for a
       // quickSetup project the chain runs the steps (in the setup tab or before the agent) and touches the marker.

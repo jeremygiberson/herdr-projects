@@ -215,6 +215,43 @@ test("a project's own split panes are built when it opens", async () => {
   assert.equal(state.closed, 1);
 });
 
+test("a project with no agent pane still starts an agent when an agent layout is picked: the first installed one", async () => {
+  const dir = makeRepo(); mkdirSync(join(dir, "api"));
+  const { v } = await launchFirst([proj("vizion", dir, { worktree: { mode: "never" }, startup: { tabs: [{ name: "terminal", folder: "api" }] } })], LAYOUTS, (v, cx) => {
+    for (let i = 0; i < 2; i++) press(v, cx, "l", CTRL_ALT); // below → right
+    assert.equal(v.layoutPick, "agent-side-terminal");
+    assert.ok(texts(v).includes("Claude Code"), "the card says which agent Enter starts");
+  });
+  const sn = state.runs.find((r) => r.command === "space.new").args;
+  assert.deepEqual([sn.argv, sn.folder], [["claude"], `${dir}/api`]);
+  assert.deepEqual(state.splits.map((s) => s.direction), ["right"]);
+});
+test("the project's agent, with its arguments, environment and default prompt, is what its agent pane starts", async () => {
+  const dir = makeRepo();
+  const agent = { command: "claude", args: "--model claude-sonnet-5-5", env: ["CLAUDE_CODE_DISABLE_1M_CONTEXT=1"], prompt: "look around" };
+  const { v, cx } = await open([proj("demo", dir, { worktree: { mode: "never" }, agent, startup: { tabs: [{ name: "ai", panes: [{ type: "agent" }] }] } })]);
+  assert.ok(texts(v).includes("Claude Code"));
+  enter(v);
+  assert.equal(v.promptBox.value(), "look around", "the default prompt prefills the launch screen");
+  enter(v); await cx.settle();
+  const sn = state.runs.find((r) => r.command === "space.new").args;
+  assert.deepEqual([sn.argv, sn.task], [["env", "CLAUDE_CODE_DISABLE_1M_CONTEXT=1", "claude", "--model", "claude-sonnet-5-5"], "look around"]);
+});
+test("the Agent section's chips fill the command, a bad env line stops the save, and a good one is written", async () => {
+  const { v, cx } = await open([proj("demo", makeRepo())]);
+  v.editSelected(); v.showSection("agent"); cx.fire(80);
+  clickId(v, cx, "pp-pagent-0");
+  assert.equal(fieldOf(v, "agentCmd").value(), "claude");
+  fieldOf(v, "agentEnv").set_value("CLAUDE_CODE_DISABLE_1M_CONTEXT=1\nnot an assignment");
+  await v.save(cx);
+  assert.match(v.error ?? "", /Agent environment: "not an assignment" is not KEY=value/);
+  assert.equal(v.mode, "edit");
+  fieldOf(v, "agentEnv").set_value("CLAUDE_CODE_DISABLE_1M_CONTEXT=1");
+  fieldOf(v, "agentArgs").set_value("--model claude-sonnet-5-5");
+  await v.save(cx);
+  assert.equal(v.mode, "list", v.error ?? "");
+  assert.deepEqual(savedFile().projects[0].agent, { command: "claude", args: "--model claude-sonnet-5-5", env: ["CLAUDE_CODE_DISABLE_1M_CONTEXT=1"], prompt: "", promptMode: "arg" });
+});
 test("a layout picked at launch wins over the project's own, and the project's own means its tabs", async () => {
   const dir = makeRepo();
   await launchFirst([proj("demo", dir, { worktree: { mode: "never" }, startup: { tabs: [{ name: "agent", panes: [{ type: "agent" }, { type: "shell", direction: "down" }] }] } })], LAYOUTS, (v, cx) => {
@@ -342,10 +379,12 @@ test("the working screen shows done steps, a spinner on the current one, and a c
 test("the editor renders all four sections", async () => {
   const { v, cx } = await open([proj("demo", "/r/demo")], LAYOUTS);
   v.editSelected();
-  for (const id of ["project", "worktree", "git", "startup"]) {
+  for (const id of ["project", "agent", "worktree", "git", "startup"]) {
     v.showSection(id);
     assert.ok(texts(v).length > 0, id);
   }
+  v.showSection("agent");
+  assert.match(texts(v), /Agent command.*Arguments.*Environment.*Default prompt/);
   v.showSection("project");
   assert.match(texts(v), /Description/);
   v.showSection("startup");

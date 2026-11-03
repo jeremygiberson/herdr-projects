@@ -128,6 +128,8 @@ export function blankProject(path = "") {
       setup: [],
     },
     git: { fetch: true, remote: "origin", base: "main", fastForward: false },
+    // The project's agent: what an agent pane runs when it names no agent of its own (its own tabs and picked layouts).
+    agent: { command: "", args: "", env: [], prompt: "", promptMode: "arg" },
     startup: { setup: [], quickSetup: false, agentTiming: "after", tabs: [] },
     quickLaunch: false,
   };
@@ -139,7 +141,7 @@ export function blankProject(path = "") {
 //         direction: "right"|"down"|"", from, folder }
 
 /** A pane with every field defaulted, `over` applied. */
-export const blankPane = (over = {}) => ({ name: "", type: "shell", command: "", agent: "", args: "", prompt: "", promptMode: "arg", direction: "", from: "", folder: "", ...over });
+export const blankPane = (over = {}) => ({ name: "", type: "shell", command: "", agent: "", args: "", env: [], prompt: "", promptMode: "arg", direction: "", from: "", folder: "", ...over });
 
 // A stored pane with its fields filled; a pane with a command and no type is a command pane.
 const fillPane = (x) => blankPane({ ...x, type: x?.type ?? (String(x?.command ?? "").trim() ? "command" : "shell") });
@@ -184,11 +186,14 @@ export function normalize(p, layouts = []) {
   worktree.autoLayout = Boolean(worktree.autoLayout);
   worktree.copy = cleanList(worktree.copy);
   worktree.setup = cleanList(worktree.setup);
+  const pa = p?.agent && typeof p.agent === "object" ? p.agent : {};
+  const agent = { command: String(pa.command ?? "").trim(), args: String(pa.args ?? ""), env: cleanList(pa.env), prompt: String(pa.prompt ?? ""), promptMode: pa.promptMode === "send" ? "send" : "arg" };
   return {
     ...b,
     ...p,
     worktree,
     git: { ...b.git, ...(p?.git ?? {}) },
+    agent,
     startup,
     quickLaunch: Boolean(p?.quickLaunch),
   };
@@ -225,30 +230,48 @@ export function resolveFolder(base, text, home, env = {}) {
   return "/" + parts.join("/");
 }
 
-/** The tabs to launch: the project's own for no layout (`pick` "" or null); a layout with `tabs` replaces them; a layout with
- *  only `panes` replaces the panes of the tab holding the project's first agent (tab 1 when it has none). An agent pane left
- *  empty by a layout takes the project's first agent, else is a shell (a tab's first such one keeps the name "agent", so a
- *  `from: "agent"` still finds it). */
-export function tabsForLaunch(project, layouts, pick) {
-  const own = project.startup.tabs;
-  if (!pick) return own;
-  const layout = allLayouts(layouts).find((l) => l.name === pick);
-  if (!layout) throw new Error(`No layout called "${pick}"`);
-  const lead = firstAgent(own);
-  const at = lead?.tab ?? 0;
-  const tabs = Array.isArray(layout.tabs)
-    ? layout.tabs.map(fillTab)
-    : own.map((t, i) => (i === at ? { ...t, command: "", panes: layout.panes.map(fillPane) } : t));
-  const src = lead?.pane;
+/** The agent to fall back on when nothing names one: `defaultAgent` from the data file, else the first installed
+ *  agent in `options` (agentOptions' list), as { agent, args }; null when there is none. */
+export function fallbackAgent(defaultAgent, options) {
+  if (defaultAgent?.agent) return { agent: defaultAgent.agent, args: defaultAgent.args ?? "" };
+  const first = (options ?? []).find((a) => a.installed !== false && (a.run ?? []).length);
+  return first ? { agent: first.run.join(" "), args: "" } : null;
+}
+
+/** Fills every agent pane that names no agent: the project's agent (command, args, env, prompt, delivery), else `src`
+ *  (the project's own first agent pane, when it names one), else `fallback` ({ agent, args }), else the pane becomes a
+ *  shell (a tab's first such one keeps the name "agent", so a `from: "agent"` still finds it). */
+function fillAgentPanes(tabs, project, src, fallback) {
+  const pa = project?.agent;
+  if (src && !String(src.agent ?? "").trim()) src = null;
   return tabs.map((t) => ({
     ...t,
     panes: t.panes.map((x, i) => {
       if (x.type !== "agent" || x.agent.trim()) return x;
-      if (src) return { ...x, agent: src.agent, args: src.args, prompt: src.prompt, promptMode: src.promptMode };
+      if (pa?.command) return { ...x, agent: pa.command, args: pa.args, env: pa.env ?? [], prompt: pa.prompt, promptMode: pa.promptMode };
+      if (src) return { ...x, agent: src.agent, args: src.args, env: src.env ?? [], prompt: src.prompt, promptMode: src.promptMode };
+      if (fallback?.agent) return { ...x, agent: fallback.agent, args: fallback.args ?? "" };
       const firstOfTab = t.panes.findIndex((y) => y.type === "agent") === i;
       return { ...x, type: "shell", name: x.name || (firstOfTab ? "agent" : "") };
     }),
   }));
+}
+
+/** The tabs to launch: the project's own for no layout (`pick` "" or null); a layout with `tabs` replaces them; a layout with
+ *  only `panes` replaces the panes of the tab holding the project's first agent (tab 1 when it has none). Agent panes that
+ *  name no agent are filled by fillAgentPanes (the project's agent, its first named agent pane, `fallback`, or a shell). */
+export function tabsForLaunch(project, layouts, pick, fallback = null) {
+  const own = project.startup.tabs;
+  let tabs = own;
+  if (pick) {
+    const layout = allLayouts(layouts).find((l) => l.name === pick);
+    if (!layout) throw new Error(`No layout called "${pick}"`);
+    const at = firstAgent(own)?.tab ?? 0;
+    tabs = Array.isArray(layout.tabs)
+      ? layout.tabs.map(fillTab)
+      : own.map((t, i) => (i === at ? { ...t, command: "", panes: layout.panes.map(fillPane) } : t));
+  }
+  return fillAgentPanes(tabs, project, firstAgent(own)?.pane, fallback);
 }
 
 /** The best auto-layout entry for a repo name and branch: repo+branch > repo > "*"+branch > "*"; repo compares
@@ -272,25 +295,21 @@ export function matchAutoLayout(entries, repo, branch) {
  *  common dir not named `.git` (a bare repo, a custom GIT_DIR), the space's own folder name. */
 export const repoNameFromKey = (key, folder) => basename(/[\\/]\.git$/.test(key) ? key.slice(0, -5) : folder);
 
-/** The tabs for a space opened outside the picker: a known project's own, else the entry's layout. An agent pane
- *  left empty takes `defaultAgent`, else is a shell. Throws `No layout called "<name>"`. */
-export function tabsForAuto({ project, layouts, entry, defaultAgent }) {
-  if (project) return tabsForLaunch(project, layouts, "");
+/** The tabs for a space opened outside the picker: a known project's own (its agent panes filled as at launch, with
+ *  `fallback` last), else the entry's layout, whose empty agent panes take `defaultAgent` or become shells.
+ *  Throws `No layout called "<name>"`. */
+export function tabsForAuto({ project, layouts, entry, defaultAgent, fallback = null }) {
+  if (project) return tabsForLaunch(project, layouts, "", fallback);
   const layout = allLayouts(layouts).find((l) => l.name === entry?.layout);
   if (!layout) throw new Error(`No layout called "${entry?.layout}"`);
   const tabs = Array.isArray(layout.tabs)
     ? layout.tabs.map(fillTab)
     : [{ name: "agent", folder: "", command: "", panes: layout.panes.map(blankPane) }];
-  return tabs.map((t) => ({
-    ...t,
-    panes: t.panes.map((x, i) => {
-      if (x.type !== "agent" || x.agent.trim()) return x;
-      if (defaultAgent?.agent) return { ...x, agent: defaultAgent.agent, args: defaultAgent.args ?? "" };
-      const firstOfTab = t.panes.findIndex((y) => y.type === "agent") === i;
-      return { ...x, type: "shell", name: x.name || (firstOfTab ? "agent" : "") };
-    }),
-  }));
+  return fillAgentPanes(tabs, null, null, defaultAgent?.agent ? defaultAgent : null);
 }
+
+/** The env lines that are not `KEY=value` (KEY: letters, digits, _; not starting with a digit). */
+export const badEnvLines = (lines) => (lines ?? []).filter((l) => !/^[A-Za-z_]\w*=/.test(String(l)));
 
 /** Tabs validated and filled: every tab has panes (a command or nothing becomes one), every pane a name, and every
  *  later pane a direction and the pane it splits. Throws with the reason when something can't be built. */
@@ -312,6 +331,9 @@ export function tabPlan(tabs) {
       if (!["agent", "shell", "command"].includes(type)) throw new Error(`Tab "${name}": pane "${pname}" has an unknown type "${x.type}"`);
       const cmd = type === "command" ? String(x.command ?? "").trim() : "";
       if (type === "command" && !cmd) throw new Error(`Tab "${name}": command pane "${pname}" has no command`);
+      const env = cleanList(x?.env);
+      const bad = badEnvLines(env);
+      if (bad.length) throw new Error(`Tab "${name}": pane "${pname}" has an env line that is not KEY=value: ${bad[0]}`);
       let direction = "";
       let from = "";
       if (i > 0) {
@@ -321,7 +343,7 @@ export function tabPlan(tabs) {
         if (!seen.includes(from)) throw new Error(`Tab "${name}": pane "${pname}" splits "${from}", which does not come before it`);
       }
       seen.push(pname);
-      return blankPane({ ...x, name: pname, type, command: cmd, direction, from });
+      return blankPane({ ...x, name: pname, type, command: cmd, env, direction, from });
     });
     return { ...t, name, folder: t.folder ?? "", command: t.command ?? "", panes };
   });
@@ -521,6 +543,7 @@ export function defaultTemplate() {
     path: "",
     template: true,
     worktree: { mode: "ask" },
+    agent: { command: "claude" },
     startup: { agent: "claude", layout: "agent-terminal" },
   });
 }

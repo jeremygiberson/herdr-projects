@@ -13,7 +13,7 @@ import { prepareSetup } from "./setup.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
 import { Watcher } from "./watch.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, migrateLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, setupScript, inUserShell, shq } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, migrateLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, setupScript, inUserShell, shq, fallbackAgent, badEnvLines } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -45,9 +45,10 @@ const ROW = 48;
 const HEADER = 30; // a section header in the project list
 const CARD = 340; // the detail card's width
 // Editor sections and the text fields each one shows.
-const SECTIONS = [["project", "Project"], ["worktree", "Worktree"], ["git", "Git"], ["startup", "Startup"]];
+const SECTIONS = [["project", "Project"], ["agent", "Agent"], ["worktree", "Worktree"], ["git", "Git"], ["startup", "Startup"]];
 const SECTION_FIELDS = {
   project: ["name", "path", "group", "description"],
+  agent: ["agentCmd", "agentArgs", "agentEnv", "agentPrompt"],
   worktree: ["branchTemplate", "root", "spaceName", "copy", "wtSetup"],
   git: ["remote", "base"],
   startup: ["setup"],
@@ -61,6 +62,10 @@ const TEXT = [
   ["path", "Folder", (p) => p.path, (p, v) => (p.path = v)],
   ["group", "Group", (p) => p.group, (p, v) => (p.group = v)],
   ["description", "Description", (p) => p.description, (p, v) => (p.description = v)],
+  ["agentCmd", "Agent command", (p) => p.agent.command, (p, v) => (p.agent.command = v), "pick above or type one; empty: the first installed agent"],
+  ["agentArgs", "Arguments", (p) => p.agent.args, (p, v) => (p.agent.args = v), "e.g. --model claude-sonnet-5-5"],
+  ["agentEnv", "Environment", (p) => joinList(p.agent.env), (p, v) => (p.agent.env = splitList(v)), "KEY=value, one per line, set for the agent only", true],
+  ["agentPrompt", "Default prompt", (p) => p.agent.prompt, (p, v) => (p.agent.prompt = v), "prefills the launch screen's prompt box; empty starts the agent bare", true],
   ["branchTemplate", "Branch name", (p) => p.worktree.branchTemplate, (p, v) => (p.worktree.branchTemplate = v), "{user} {date} {slug} {repo} {project}"],
   ["root", "Worktree folder", (p) => p.worktree.root, (p, v) => (p.worktree.root = v), "{repo} {branch} plus the above"],
   ["spaceName", "Space name", (p) => p.worktree.spaceName, (p, v) => (p.worktree.spaceName = v), "the sidebar name: {name} {branch} {slug} {user} {date} {repo}"],
@@ -79,7 +84,7 @@ const TAB_BOXES = [
 const PANE_BOXES = [
   ["folder", "Folder", "empty: the tab's folder"],
   ["command", "Command", "runs in this pane"],
-  ["agent", "Agent command", "pick above or type one"],
+  ["agent", "Agent command", "pick above or type one; empty: the project's agent"],
   ["args", "Arguments", "e.g. --model opus --permission-mode plan"],
   ["prompt", "First prompt", "sent to the agent"],
 ];
@@ -94,7 +99,9 @@ export default class ProjectPresets extends View {
       this.slot = slot;
       initLog("launcher started");
       // Every launcher block's copy is alive once shown, hidden or not: only the chosen slot's watcher acts.
-      this.watcher = new Watcher({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active: () => (shared(LAUNCHER) ?? "sidebar") === this.slot });
+      this.allAgents = [];
+      knownAgents().then((a) => { this.allAgents = agentOptions(a); }).catch((e) => logError("knownAgents", e));
+      this.watcher = new Watcher({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log, active: () => (shared(LAUNCHER) ?? "sidebar") === this.slot, agents: () => this.allAgents });
       this.watcher.start(cx);
       // Recent entries for folders that are gone (throwaway checkouts) would otherwise stay in shared state for good.
       cx.spawn(async () => {
@@ -171,6 +178,7 @@ export default class ProjectPresets extends View {
         this.userLayouts = c.layouts;
         this.gitInfo = c.gitInfo;
         this.hideTemplate = c.hideTemplate;
+        this.defaultAgent = c.defaultAgent;
         this.syncTemplate();
         this.raw = c.raw;
       } catch (e) {
@@ -325,6 +333,15 @@ export default class ProjectPresets extends View {
   /** The layout name a launch of `p` uses: the picked one, else "" (the project's own tabs). */
   layoutNameFor(p) { return this.layoutPick ?? ""; }
 
+  /** The agent used when neither a pane nor the project names one: the file's `defaultAgent`, else the first installed. */
+  fallback() { return fallbackAgent(this.defaultAgent, this.allAgents ?? []); }
+  /** The tabs a launch of `p` gets with the layout `pick` (default: the picked one), agent panes filled in. */
+  resolvedTabs(p, pick = this.layoutNameFor(p)) {
+    try { return tabsForLaunch(p, this.layouts, pick, this.fallback()); } catch { return tabsForLaunch(p, this.layouts, "", this.fallback()); }
+  }
+  /** The first agent pane a launch of `p` starts, or null. */
+  leadPane(p, pick) { return firstAgent(this.resolvedTabs(p, pick))?.pane ?? null; }
+
   /** ctrl+alt+I: shows or hides the detail card; the choice is kept for next time. */
   toggleDetail() {
     this.detail = !this.detail;
@@ -441,7 +458,7 @@ export default class ProjectPresets extends View {
   /** The mini icon for what a project starts: its agent (claude, hermes, pi…), the shell icon for a plain
    *  shell, and the generic agent icon for a command herdr has no entry for. */
   agentIcon(t, p, size = 16) {
-    const name = commandName(firstAgent(p.startup.tabs)?.pane.agent);
+    const name = commandName(this.leadPane(p)?.agent);
     if (!name) return this.shellIcon(t, size);
     return this.programIcon(t, this.allAgents.find((a) => a.key === name || commandName((a.run ?? []).join(" ")) === name), size);
   }
@@ -476,7 +493,7 @@ export default class ProjectPresets extends View {
     this.nameInput = null;
     this.preview = "";
     if (this.launch.worktree) this.makeNameInput();
-    this.promptBox = TextareaState.new({ placeholder: "First prompt (optional)", value: firstAgent(p.startup.tabs)?.pane.prompt ?? "", rows: 3 });
+    this.promptBox = TextareaState.new({ placeholder: "First prompt (optional)", value: this.leadPane(p)?.prompt ?? "", rows: 3 });
     this.promptBox.set_auto_grow(3, 8);
     // No `submit` handler: the box fires it on every Enter, which also types a newline. ctrl+Enter launches (see keys).
     (this.nameInput ?? this.promptBox).focus();
@@ -532,7 +549,7 @@ export default class ProjectPresets extends View {
     cx?.notify();
   }
 
-  start(p, { worktree, branchText = "", prompt = firstAgent(p.startup.tabs)?.pane?.prompt ?? "", agentTiming = p.startup.agentTiming, pick = this.layoutNameFor(p) } = {}) {
+  start(p, { worktree, branchText = "", prompt = this.leadPane(p)?.prompt ?? "", agentTiming = p.startup.agentTiming, pick = this.layoutNameFor(p) } = {}) {
     this.mode = "busy";
     this.notes = [];
     this.error = null;
@@ -540,7 +557,7 @@ export default class ProjectPresets extends View {
     this.cx?.spawn(async (cx) => {
       try {
         if (pick && !this.layouts.some((l) => l.name === pick)) throw new Error(`No layout called "${pick}". Layouts: ${this.layouts.map((l) => l.name).join(", ") || "none"}`);
-        const tabs = tabsForLaunch(p, this.layouts, pick);
+        const tabs = tabsForLaunch(p, this.layouts, pick, this.fallback());
         tabPlan(tabs); // a broken layout is reported before anything is created
         const existing = findSpace(p);
         if (!worktree && existing) {
@@ -560,7 +577,7 @@ export default class ProjectPresets extends View {
           }
         }
         setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
-        const first = firstAgent(p.startup.tabs)?.pane;
+        const first = firstAgent(tabs)?.pane;
         if (prompt && first?.promptMode === "send" && agentTiming === "with") log("Waiting for the agent to be ready for its prompt…");
         // Stay open until the prompt is sent: closing the popup cancels this task.
         await buildWorkspace({ project: p, folder, name, tabs, prompt, agentTiming, chain: quick ? "" : chain, log });
@@ -646,6 +663,8 @@ export default class ProjectPresets extends View {
       // An emptied list stores the plain shell tab normalize gives a project with none.
       if (!d.startup.tabs.length) d.startup.tabs = [{ name: "shell", folder: "", command: "", panes: [] }];
       tabPlan(d.startup.tabs);
+      const badEnv = badEnvLines(d.agent.env);
+      if (badEnv.length) throw new Error(`Agent environment: "${badEnv[0]}" is not KEY=value`);
       if (!d.name) throw new Error("Give the project a name");
       if (!d.template) {
         if (!d.path.trim()) throw new Error("Choose the project's folder: Browse… or type its path");
@@ -821,6 +840,29 @@ export default class ProjectPresets extends View {
     this.setField(tab, "command", "");
     this.paneAt = null;
     this.makeBoxes();
+  }
+
+  /** The Agent section: the project's agent (what agent panes run unless they name their own): chips for the known
+   *  agents, its command, arguments, environment, default prompt and prompt delivery. */
+  renderAgentSection(t, cx, field, label) {
+    const d = this.draft;
+    const cmd = this.fieldState("agentCmd");
+    const act = (id, text, action, on = false, lead = null) => this.button(t, id, text, on, () => { action(); cx.notify(); }, lead);
+    const chip = (id, text, value, lead, faint) => act(id, text, () => { cmd.set_value(value); d.agent.promptMode = /^hermes\b/.test(value) ? "send" : "arg"; }, cmd.value().trim() === value, lead).when(faint, (el) => el.opacity(0.6));
+    const send = d.agent.promptMode === "send";
+    const dim = (text) => div().text_size(11.5).text_color(t.dim).child(text);
+    return [
+      label("Agent", "runs in every agent pane that names no agent of its own, in the project's tabs and in picked layouts"),
+      h_flex().flex_wrap().gap(6)
+        .children(this.agents.map((a, i) => chip(`pp-pagent-${i}`, a.name, a.run.join(" "), this.programIcon(t, a, 14), a.installed === false))),
+      field("agentCmd"),
+      field("agentArgs"),
+      field("agentEnv"),
+      field("agentPrompt"),
+      h_flex().pt(8).gap(8).items_center()
+        .child(act("pp-ppmode", `Prompt: ${send ? "typed after start" : "command-line argument"}`, () => (d.agent.promptMode = send ? "arg" : "send")))
+        .child(dim(send ? "for agents that reject a prompt argument" : "claude and most agents")),
+    ];
   }
 
   /** The Startup section: setup commands, agent timing, the tabs list and the selected tab's and pane's fields. */
@@ -1298,7 +1340,7 @@ export default class ProjectPresets extends View {
   /** The card for the template row: what it is, the settings a project made from it starts with, and its buttons. */
   renderTemplateCard(t, card, r, cx) {
     const p = r.p;
-    const name = commandName(firstAgent(p.startup.tabs)?.pane.agent);
+    const name = commandName(this.leadPane(p)?.agent);
     const program = name && this.allAgents.find((a) => a.key === name || commandName((a.run ?? []).join(" ")) === name);
     const kv = (k, v) => h_flex().gap(10).text_size(12).text_color(t.foreground).child(div().w(84).text_color(t.dim).child(k)).child(v);
     return card
@@ -1325,7 +1367,7 @@ export default class ProjectPresets extends View {
     if (p.template) return this.renderTemplateCard(t, card, r, cx);
     const folder = projectFolder(p);
     const info = this.info[folder];
-    const name = commandName(firstAgent(p.startup.tabs)?.pane.agent);
+    const name = commandName(this.leadPane(p)?.agent);
     const program = name && this.allAgents.find((a) => a.key === name || commandName((a.run ?? []).join(" ")) === name);
     const kv = (k, v) => h_flex().gap(10).items_start().text_size(12)
       .child(div().w(84).flex_none().text_color(t.dim).child(k))
@@ -1561,6 +1603,7 @@ export default class ProjectPresets extends View {
         field("description"),
         h_flex().pt(10).child(toggle("pp-pin", "Pin to top", d.pinned, (v) => (d.pinned = v))),
       ],
+      agent: () => this.renderAgentSection(t, cx, field, label),
       worktree: () => [
         h_flex().pt(10).gap(8).items_center()
           .child(this.button(t, "pp-mode", `Worktree: ${d.worktree.mode}`, false, () => { d.worktree.mode = MODES[(MODES.indexOf(d.worktree.mode) + 1) % MODES.length]; cx.notify(); }))
