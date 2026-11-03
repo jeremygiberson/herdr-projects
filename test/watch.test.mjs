@@ -2,6 +2,7 @@ import "./helpers/setup.mjs";
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { makeRepo, scratch, sh } from "./helpers/repo.mjs";
 
 const { state, reset, setShared } = await import("./helpers/herdr-stub.mjs");
@@ -23,12 +24,12 @@ function addSpace(id, folder, program = SHELL, over = {}) {
 
 /** A Watcher with recording fakes for its injected functions (real git underneath repoKey, branchOf, realPath),
  *  and a fake cx whose timer is captured and whose spawn runs at once. */
-function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent = null, build = null } = {}) {
+function harness({ projects = [], layouts = [], autoLayouts = [], defaultAgent = null, build = null, loadConfig = null } = {}) {
   const rec = { builds: [], setups: [], repoKeys: [], logs: [], order: [], timer: null };
   const tasks = [];
   const cx = { timer: { every: (ms, fn) => { rec.timer = { ms, fn }; } }, spawn: (fn) => { tasks.push(fn(cx)); } };
   const w = new Watcher({
-    loadConfig: async () => ({ projects, layouts, autoLayouts, defaultAgent, gitInfo: true, hideTemplate: false, raw: "{}" }),
+    loadConfig: loadConfig ?? (async () => ({ projects, layouts, autoLayouts, defaultAgent, gitInfo: true, hideTemplate: false, raw: "{}" })),
     prepareSetup: async ({ log, ...a }) => { rec.setups.push(a); return { chain: `chain:${a.folder}`, marker: undefined, steps: [], env: {} }; },
     buildWorkspace: async ({ log, ...a }) => {
       rec.builds.push(a);
@@ -250,4 +251,36 @@ test("a build failure is logged and toasted, and the space is not retried", asyn
   assert.equal(rec.logs.filter((l) => l.level === "error").length, 1);
   assert.match(rec.logs.find((l) => l.level === "error").message, /boom/);
   assert.deepEqual(state.notified, [{ title: "Projects", body: `couldn't set up ${basename(dir)}: boom`, level: "error" }]);
+});
+
+test("a space in a subfolder of the checkout is the checkout: isWorktree false, built at the checkout", async () => {
+  const dir = makeRepo();
+  const sub = join(dir, "sub");
+  mkdirSync(sub);
+  const p = apiProject(dir);
+  const { w, cx, rec, tick } = harness({ projects: [p] });
+  w.start(cx);
+  addSpace("s1", sub);
+  await tick();
+  assert.deepEqual(rec.setups, [{ project: p, folder: dir, isWorktree: false, branch: "main", repo: basename(dir), home: state.home }]);
+  assert.deepEqual(rec.builds, [{
+    project: p, folder: dir, name: "sub", tabs: p.startup.tabs, prompt: "", agentTiming: "after",
+    chain: `chain:${dir}`, existing: existingOf("s1", sub),
+  }]);
+});
+
+test("an unreadable projects file is toasted once and logged every time", async () => {
+  const dir = makeRepo();
+  const wt = join(scratch("pp-wt"), "feat");
+  sh(dir, "worktree", "add", "-q", "-b", "feat", wt);
+  const { w, cx, rec, tick } = harness({ loadConfig: async () => { throw new Error("projects.json is not valid JSON"); } });
+  w.start(cx);
+  addSpace("s1", dir);
+  addSpace("s2", wt);
+  await tick();
+  assert.deepEqual(rec.builds, []);
+  assert.equal(rec.logs.filter((l) => l.level === "error").length, 2);
+  assert.equal(state.notified.length, 1);
+  assert.equal(state.notified[0].level, "error");
+  assert.match(state.notified[0].body, /not valid JSON/);
 });

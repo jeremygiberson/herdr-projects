@@ -2,7 +2,7 @@
 // app's New worktree, the new-space shortcut) on an auto-layout project's checkout or worktree, or on a repo an
 // `autoLayouts` entry names, and builds the tabs into it. A space is considered once, when it first appears.
 import { spaces, agents, panes, shared, home, notify } from "herdr";
-import { projectFolder } from "./git.js";
+import { projectFolder, inspect } from "./git.js";
 import { matchAutoLayout, tabsForAuto, blankProject, basename, repoNameFromKey } from "./lib.js";
 
 const OPENING = "projects.opening"; // { [folder]: when the picker started opening it }, written by buildWorkspace
@@ -17,6 +17,7 @@ export class Watcher {
   constructor({ loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log }) {
     Object.assign(this, { loadConfig, prepareSetup, buildWorkspace, repoKey, branchOf, realPath, log });
     this.seen = new Set();
+    this.configWarned = false; // a bad data file is toasted once, then only logged
   }
 
   /** Every space open now counts as seen and is never acted on; only later ones are. */
@@ -53,7 +54,15 @@ export class Watcher {
     try {
       const key = await this.repoKey(space.folder);
       if (!key) return skip("not in a git repo");
-      const config = await this.loadConfig();
+      // A space in a subfolder of a checkout is that checkout: its top level is the folder set up and built.
+      const top = await this.realPath((await inspect(space.folder)).top);
+      let config;
+      try { config = await this.loadConfig(); } catch (e) {
+        this.log("error", `watcher: couldn't read the projects file: ${e?.message ?? e}`, { space: space.id });
+        if (!this.configWarned) notify({ title: "Projects", body: `auto-layout is off until the projects file reads: ${e?.message ?? e}`, level: "error" });
+        this.configWarned = true;
+        return;
+      }
       const keys = new Map();
       const keyOf = async (folder) => { if (!keys.has(folder)) keys.set(folder, await this.repoKey(folder)); return keys.get(folder); };
       let project = null;
@@ -65,24 +74,25 @@ export class Watcher {
       if (project) {
         const main = projectFolder(project);
         repo = basename(main);
-        isWorktree = (await this.realPath(space.folder)) !== (await this.realPath(main));
+        isWorktree = top !== (await this.realPath(main));
       } else {
-        repo = repoNameFromKey(key, space.folder);
+        repo = repoNameFromKey(key, top);
         entry = matchAutoLayout(config.autoLayouts, repo, branch);
         if (!entry) return skip("no auto-layout project or entry for its repo");
         // A main checkout's common dir is its own .git; a linked worktree's is the main checkout's.
-        isWorktree = key !== `${await this.realPath(space.folder)}/.git`;
+        isWorktree = `${top}/.git` !== key;
       }
 
-      const base = project ?? blankProject(space.folder);
+      const base = project ?? blankProject(top);
       const tabs = tabsForAuto({ project, layouts: config.layouts, entry, defaultAgent: config.defaultAgent });
       const say = (m) => this.log("debug", m);
-      // There is no busy screen here to run quick setup inline: the chain runs it, and touches the marker.
+      // quickSetup means "run setup inline on the picker's busy screen"; there is no such screen here, so for a
+      // quickSetup project the chain runs the steps (in the setup tab or before the agent) and touches the marker.
       const forSetup = base.startup.quickSetup ? { ...base, startup: { ...base.startup, quickSetup: false } } : base;
-      const { chain } = await this.prepareSetup({ project: forSetup, folder: space.folder, isWorktree, branch, repo, home: home(), log: say });
+      const { chain } = await this.prepareSetup({ project: forSetup, folder: top, isWorktree, branch, repo, home: home(), log: say });
       this.log("debug", "watcher: setting up", { space: space.id, folder: space.folder, project: project?.name ?? null, layout: entry?.layout ?? null, agent: Boolean(agent) });
       await this.buildWorkspace({
-        project: base, folder: space.folder, name: space.name, tabs, prompt: "",
+        project: base, folder: top, name: space.name, tabs, prompt: "",
         agentTiming: project?.startup.agentTiming ?? "with", chain, log: say,
         existing: {
           space: space.id, tab: space.tabs[0].id,
