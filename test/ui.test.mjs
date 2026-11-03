@@ -1579,9 +1579,10 @@ test("opening a new worktree copies the listed files, runs worktree and startup 
   const wt = state.runs.find((r) => r.command === "space.new").args.folder;
   assert.equal(readFileSync(join(wt, ".env"), "utf8"), "A=1\n");
   const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
-  assert.match(line, /npm ci && echo hi && touch '.*\.projects-setup-done' && exec 'claude'/);
+  assert.match(line, /sh -ec 'npm ci' && sh -ec 'echo hi' && touch '.*\.projects-setup-done' && cd '[^']*' && exec 'claude'/);
   assert.match(readFileSync(excludeFile(wt), "utf8"), /projects-setup-done/);
   assert.ok(v.notes.some((n) => /copied 1 file/.test(n)));
+  assert.ok(["will run: npm ci", "will run: echo hi"].every((n) => v.notes.includes(n)), v.notes.join(" | "));
 });
 test("a worktree that already carries the marker gets only the startup setup: no copy, no worktree setup, no touch", async () => {
   const dir = realpathSync(makeRepo()); const wt = join(scratch("pp-wt"), "w"); sh(dir, "worktree", "add", "-q", wt, "-b", "w");
@@ -1589,7 +1590,7 @@ test("a worktree that already carries the marker gets only the startup setup: no
   const { v, cx } = await open([proj("wt", wt, { worktree: { mode: "never", copy: [".env"], setup: ["echo X"] }, startup: { setup: ["echo Y"], agentTiming: "after", ...AG("claude") } })]);
   enter(v); enter(v); await cx.settle(); // the launch screen, then launch
   const line = state.runs.find((r) => r.command === "space.new").args.argv[2];
-  assert.match(line, /echo Y && exec/); assert.doesNotMatch(line, /echo X|touch/);
+  assert.match(line, /sh -ec 'echo Y' && cd '[^']*' && exec/); assert.doesNotMatch(line, /echo X|touch/);
   assert.equal(existsSync(join(wt, ".env")), false);
 });
 test("quickSetup runs the steps inline before the agent and passes no chain", async () => {
@@ -1599,6 +1600,13 @@ test("quickSetup runs the steps inline before the agent and passes no chain", as
   assert.equal(existsSync(join(dir, "ran.txt")), true);
   assert.deepEqual(state.runs.find((r) => r.command === "space.new").args.argv, ["claude"]);
   assert.ok(v.notes.some((n) => n === "$ touch ran.txt"));
+  assert.ok(!v.notes.some((n) => n.startsWith("will run:")));
+});
+test("inline setup steps get the PROJECTS_* env", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "never" }, startup: { setup: ["printf '%s' \"$PROJECTS_NAME\" > n.txt"], quickSetup: true, ...AG("claude") } })]);
+  enter(v); enter(v); await cx.settle();
+  assert.equal(readFileSync(join(dir, "n.txt"), "utf8"), "api");
 });
 test("a slash in the branch box is used verbatim", async () => {
   const dir = realpathSync(makeRepo()); const root = scratch("pp-wt");
@@ -1670,6 +1678,14 @@ test("the demo view launch-screen opens the screen", async () => {
   const { v } = await open([proj("api", realpathSync(makeRepo()))]);
   v.applyDemo({ view: "launch-screen", project: "api" });
   assert.equal(v.mode, "launch");
+});
+test("ctrl+Enter on the launch screen launches", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { worktree: { mode: "never" }, startup: AG("claude") })]);
+  enter(v); await cx.settle();
+  assert.equal(v.mode, "launch");
+  press(v, cx, "enter", { control: true }); await cx.settle();
+  assert.equal(state.runs.filter((r) => r.command === "space.new").length, 1);
 });
 test("Shift+Enter on the list opens the launch screen on the checkout path", async () => {
   const { v, cx } = await open([proj("api", realpathSync(makeRepo()), { worktree: { mode: "ask" } })]);

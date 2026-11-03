@@ -9,10 +9,10 @@ import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, share
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
 import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
 import { buildWorkspace } from "./workspace.js";
-import { copyInto, isNewWorktree, markerPath, excludeMarker } from "./setup.js";
+import { prepareSetup } from "./setup.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupVars, setupChain, expand, setupSummary } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, shq } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -502,11 +502,16 @@ export default class ProjectPresets extends View {
           this.dismiss();
           return run("space.select", { id: existing.id });
         }
-        const { folder, name, chain, steps, mark } = await this.prepareLaunch(p, { worktree, branchText }, log);
+        const { folder, name, chain, steps, env, marker } = await this.prepareLaunch(p, { worktree, branchText }, log);
         const quick = p.startup.quickSetup;
-        if (quick && await runInline(steps, folder, log) && mark) {
-          await excludeMarker(folder);
-          await exec("touch", [markerPath(folder)]);
+        if (quick && await runInline(steps, folder, env, log) && marker) {
+          try {
+            const r = await exec("touch", [marker]);
+            if (r.code !== 0) throw new Error(r.stderr.split("\n")[0] || `touch exited ${r.code}`);
+          } catch (e) {
+            logError("mark worktree", e);
+            log(`couldn't mark the worktree as set up (its setup runs again next time): ${e.message}`);
+          }
         }
         setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
         const first = firstAgent(p.startup.tabs)?.pane;
@@ -522,27 +527,18 @@ export default class ProjectPresets extends View {
     });
   }
 
-  /** The worktree (created, copied into, chained) or the prepared checkout: { folder, name, chain, steps }. */
+  /** The worktree (created, copied into, chained) or the prepared checkout: { folder, name, chain, steps, env, marker }
+   *  (see prepareSetup). */
   async prepareLaunch(p, { worktree, branchText }, log) {
-    const main = projectFolder(p), quick = p.startup.quickSetup;
-    const note = (steps) => { if (!quick) steps.forEach((s) => log(`$ ${s}`)); };
+    const main = projectFolder(p);
     if (!worktree) {
       await prepareMain(p, log);
-      const { vars, env } = setupVars({ main, folder: main, branch: (await inspect(main)).branch, repo: basename(main), name: p.name, home: home() });
-      const steps = p.startup.setup.map((s) => expand(s, vars));
-      note(p.startup.setup);
-      return { folder: main, name: p.name, steps, chain: setupChain({ steps: p.startup.setup, vars, env, folder: main }) };
+      const setup = await prepareSetup({ project: p, folder: main, isWorktree: false, branch: (await inspect(main)).branch, repo: basename(main), home: home(), log });
+      return { folder: main, name: p.name, ...setup };
     }
     const wt = await createWorktree(p, branchText, log);
-    const isNew = await isNewWorktree(wt.folder);
-    const { vars, env } = setupVars({ main, folder: wt.folder, branch: wt.branch, repo: wt.vars.repo, name: p.name, home: home() });
-    if (isNew && p.worktree.copy.length) await copyInto({ main, dest: wt.folder, patterns: p.worktree.copy, vars, log });
-    const raw = (isNew ? p.worktree.setup : []).concat(p.startup.setup);
-    const marker = isNew && raw.length && !quick ? markerPath(wt.folder) : undefined;
-    const chain = setupChain({ steps: raw, vars, env, folder: wt.folder, marker });
-    if (marker) await excludeMarker(wt.folder);
-    note(raw);
-    return { folder: wt.folder, name: worktreeSpaceName(p, wt), steps: raw.map((s) => expand(s, vars)), chain, mark: isNew && raw.length > 0 };
+    const setup = await prepareSetup({ project: p, folder: wt.folder, isWorktree: true, branch: wt.branch, repo: wt.vars.repo, home: home(), log });
+    return { folder: wt.folder, name: worktreeSpaceName(p, wt), ...setup };
   }
 
   // ---- editor -----------------------------------------------------------
@@ -1508,12 +1504,13 @@ export default class ProjectPresets extends View {
   }
 }
 
-/** Quick setup: the steps one after another in `folder`, stopping at the first failure. exec has a 30 s limit each. */
-async function runInline(steps, folder, log) {
+/** Quick setup: the steps (braces already expanded) one after another in `folder`, each in its own shell with the
+ *  PROJECTS_* `env` exported, as in a chain; stops at the first failure. exec has a 30 s limit each. */
+async function runInline(steps, folder, env, log) {
   for (const step of steps) {
     log(`$ ${step}`);
     try {
-      const r = await exec("sh", ["-c", step], { cwd: folder });
+      const r = await exec("sh", ["-c", `${exportsPrefix(env)}; cd ${shq(folder)} && sh -ec ${shq(step)}`], { cwd: folder });
       if (r.code !== 0) return log(`setup failed (${r.code}): ${step}`), false;
     } catch {
       return log(`setup stopped (timed out or couldn't start): ${step}`), false;

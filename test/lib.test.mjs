@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix } from "../mods/projects/lib.js";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { scratch } from "./helpers/repo.mjs";
 
@@ -589,10 +589,10 @@ test("setupVars gives braces and env in a fixed order", () => {
   assert.deepEqual(vars, { main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" });
   assert.deepEqual(Object.keys(env), ["PROJECTS_MAIN", "PROJECTS_FOLDER", "PROJECTS_BRANCH", "PROJECTS_REPO", "PROJECTS_NAME", "PROJECTS_HOME"]);
 });
-test("setupChain exports env, cds, runs steps verbatim with braces expanded, and touches the marker", () => {
+test("setupChain exports env, cds, runs each step in its own shell with braces expanded, and touches the marker", () => {
   const { vars, env } = setupVars({ main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" });
   const c = setupChain({ steps: ["cp {main}/.env .env", "echo 'it''s $HOME' && true"], vars, env, folder: "/w", marker: "/w/.projects-setup-done" });
-  assert.equal(c, "export PROJECTS_MAIN='/m'; export PROJECTS_FOLDER='/w'; export PROJECTS_BRANCH='b'; export PROJECTS_REPO='r'; export PROJECTS_NAME='N'; export PROJECTS_HOME='/h'; cd '/w' && cp /m/.env .env && echo 'it''s $HOME' && true && touch '/w/.projects-setup-done'");
+  assert.equal(c, `export PROJECTS_MAIN='/m'; export PROJECTS_FOLDER='/w'; export PROJECTS_BRANCH='b'; export PROJECTS_REPO='r'; export PROJECTS_NAME='N'; export PROJECTS_HOME='/h'; cd '/w' && sh -ec 'cp /m/.env .env' && sh -ec ${shq("echo 'it''s $HOME' && true")} && touch '/w/.projects-setup-done'`);
   assert.equal(setupChain({ steps: [], vars, env, folder: "/w" }), "");
   assert.ok(!setupChain({ steps: ["x"], vars, env, folder: "/w" }).includes("touch"));
 });
@@ -602,14 +602,56 @@ test("setupChain runs in a real shell with env and braces", () => {
   execFileSync("sh", ["-c", setupChain({ steps: ["printf '%s' \"$PROJECTS_NAME-{branch}\" > out.txt"], vars, env, folder: dir })], { encoding: "utf8" });
   assert.equal(readFileSync(join(dir, "out.txt"), "utf8"), "N-b");
 });
-test("chainThenAgent execs the quoted agent with the prompt and falls back to a shell; chainAlone only falls back", () => {
+/** Runs a chain of `steps` in a scratch folder, started from another folder: { dir, ok, marked }. */
+function runChain(steps) {
+  const dir = scratch(); const elsewhere = scratch();
+  const marker = join(dir, ".projects-setup-done");
+  const { vars, env } = setupVars({ main: "/the/main", folder: dir, branch: "b", repo: "r", name: "N", home: "/h" });
+  let ok = true;
+  try { execFileSync("sh", ["-c", setupChain({ steps, vars, env, folder: dir, marker })], { cwd: elsewhere, encoding: "utf8", stdio: "pipe" }); } catch { ok = false; }
+  return { dir, ok, marked: existsSync(marker) };
+}
+test("a step ending in a # comment does not swallow the next step, which sees $PROJECTS_MAIN", () => {
+  const r = runChain(["echo hi # a comment", "printf '%s' \"$PROJECTS_MAIN\" > main.txt"]);
+  assert.deepEqual([r.ok, r.marked], [true, true]);
+  assert.equal(readFileSync(join(r.dir, "main.txt"), "utf8"), "/the/main");
+});
+test("a step with ; that fails part-way fails the chain and leaves no marker", () => {
+  const r = runChain(["false; echo x", "touch after.txt"]);
+  assert.deepEqual([r.ok, r.marked, existsSync(join(r.dir, "after.txt"))], [false, false, false]);
+});
+test("a step with a trailing & does not break the chain, and steps run in the folder", () => {
+  const r = runChain(["sleep 0 &", "pwd -P > where.txt"]);
+  assert.deepEqual([r.ok, r.marked], [true, true]);
+  assert.equal(readFileSync(join(r.dir, "where.txt"), "utf8").trim(), realpathSync(r.dir));
+});
+test("a step with || keeps its own fallback and the chain goes on", () => {
+  const r = runChain(["false || touch fell.txt", "touch next.txt"]);
+  assert.deepEqual([r.ok, r.marked, existsSync(join(r.dir, "fell.txt")), existsSync(join(r.dir, "next.txt"))], [true, true, true, true]);
+  assert.equal(runChain(["true || touch never.txt", "false"]).marked, false);
+});
+test("expandSetup fills only the setup variables and never a ${...} or a brace it does not know", () => {
+  const vars = { main: "/m", folder: "/w", branch: "b", repo: "r", name: "N", home: "/h" };
+  assert.equal(expandSetup("{main}/x {folder} {branch} {repo} {name} {home}", vars), "/m/x /w b r N /h");
+  assert.equal(expandSetup("cp ${PROJECTS_MAIN}/x .", vars), "cp ${PROJECTS_MAIN}/x .");
+  assert.equal(expandSetup("echo ${main}", vars), "echo ${main}");
+  assert.equal(expandSetup("awk '{print}' f | jq '{x: .y}'", vars), "awk '{print}' f | jq '{x: .y}'");
+  assert.equal(expand("{user}-{x}", { user: "u" }), "u-", "branch templates keep the old expand");
+});
+test("exportsPrefix exports each variable quoted, joined by ;", () => {
+  assert.equal(exportsPrefix({ A: "x y", B: "it's" }), `export A='x y'; export B=${shq("it's")}`);
+  assert.equal(exportsPrefix({}), "");
+});
+test("chainThenAgent execs the quoted agent with the prompt in the pane's folder and falls back to a shell; chainAlone only falls back", () => {
   assert.equal(chainThenAgent("cd '/w' && npm ci", ["claude", "--model", "opus"], "fix it's"), "cd '/w' && npm ci && exec 'claude' '--model' 'opus' 'fix it'\\''s' || exec \"$SHELL\"");
+  assert.equal(chainThenAgent("cd '/w' && npm ci", ["claude"], "", "/w/backend"), "cd '/w' && npm ci && cd '/w/backend' && exec 'claude' || exec \"$SHELL\"");
   assert.equal(chainThenAgent("", ["claude"], "x"), "");
   assert.equal(chainAlone("cd '/w' && npm ci"), "cd '/w' && npm ci || exec \"$SHELL\"");
 });
 test("setupSummary counts copy and setup and names the timing", () => {
   assert.equal(setupSummary(normalize({ path: "/a", worktree: { copy: [".env"], setup: ["npm ci", "npm run build"] }, startup: { setup: ["docker compose up -d"], agentTiming: "after" } })), "1 copy · 3 setup · agent after setup");
   assert.equal(setupSummary(normalize({ path: "/a", startup: { agentTiming: "with" } })), "no setup");
+  assert.equal(setupSummary(normalize({ path: "/a", startup: { setup: ["npm ci"], quickSetup: true, agentTiming: "after" } })), "1 setup · setup inline");
 });
 
 test("a setup command containing ;; stays one element", () => {

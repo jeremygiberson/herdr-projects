@@ -331,13 +331,28 @@ export function setupVars({ main, folder, branch, repo, name, home }) {
   };
 }
 
-/** One shell line: export the env, cd to `folder`, run each step (braces expanded, otherwise verbatim), touch `marker`
- *  when given. "" when there are no steps. */
+const SETUP_VARS = ["main", "folder", "branch", "repo", "name", "home"];
+
+/** Fills {main}, {folder}, {branch}, {repo}, {name} and {home} in a setup step or copy pattern and nothing else: a shell
+ *  `${VAR}`, awk's `{print}` or jq's `{x: .y}` stay as written. (Branch templates use `expand`.) */
+export function expandSetup(text, vars) {
+  return String(text ?? "").replace(/(\$?)\{(\w+)\}/g, (m, dollar, k) => (dollar || !SETUP_VARS.includes(k) ? m : vars[k] ?? ""));
+}
+
+/** "export A='x'; export B='y'": the env for a shell line, values quoted. */
+export const exportsPrefix = (env) => Object.entries(env ?? {}).map(([k, v]) => `export ${k}=${shq(v)}`).join("; ");
+
+/** One setup step as its own shell (braces expanded, otherwise verbatim), so its `#`, `;`, `&` and `||` stay inside it;
+ *  `-e` makes a step like `a; b` fail when `a` fails. */
+export const setupStep = (step, vars) => `sh -ec ${shq(expandSetup(step, vars))}`;
+
+/** One shell line: export the env, cd to `folder`, run each step in its own shell, touch `marker` when given.
+ *  "" when there are no steps. */
 export function setupChain({ steps, vars, env, folder, marker }) {
   if (!(steps ?? []).length) return "";
-  const exports = Object.entries(env ?? {}).map(([k, v]) => `export ${k}=${shq(v)}`);
-  const chain = [`cd ${shq(folder)}`, ...steps.map((x) => expand(x, vars)), ...(marker ? [`touch ${shq(marker)}`] : [])].join(" && ");
-  return [...exports, chain].join("; ");
+  const chain = [`cd ${shq(folder)}`, ...steps.map((x) => setupStep(x, vars)), ...(marker ? [`touch ${shq(marker)}`] : [])].join(" && ");
+  const exports = exportsPrefix(env);
+  return exports ? `${exports}; ${chain}` : chain;
 }
 
 /** The chain, then the agent in place of the shell, started in `dir` (its own pane's folder: the chain ends in the
@@ -348,12 +363,13 @@ export const chainThenAgent = (chain, argv, prompt, dir) =>
 /** The chain alone; a shell takes over when it ends or fails. */
 export const chainAlone = (chain) => `${chain} || exec "$SHELL"`;
 
-/** "2 copy · 3 setup · agent after setup", or "no setup". */
+/** "2 copy · 3 setup · agent after setup" ("setup inline" when it runs in the popup), or "no setup". */
 export function setupSummary(project) {
   const copy = project.worktree.copy.length;
   const setup = project.worktree.setup.length + project.startup.setup.length;
   if (!copy && !setup) return "no setup";
-  return [copy && `${copy} copy`, setup && `${setup} setup`, `agent ${project.startup.agentTiming} setup`].filter(Boolean).join(" · ");
+  const how = project.startup.quickSetup ? "setup inline" : `agent ${project.startup.agentTiming} setup`;
+  return [copy && `${copy} copy`, setup && `${setup} setup`, how].filter(Boolean).join(" · ");
 }
 
 // ---- agent options ----------------------------------------------------------------------------
