@@ -89,7 +89,7 @@ One JSON file, `data/projects.json`, hand-editable, written with the expected-pr
 
 **Upgrade of old entries** in `normalize()`: `startup.agent/args/prompt/promptMode` plus `startup.layout` become tab 1 (the named layout expands to its panes with the agent first); `startup.tabs` strings become `{ name: <first word>, command }`. Saving writes the new form.
 
-**Named layouts** (`layouts` in the file, the ctrl+alt+L cycling, the thumbnails) stay. A layout may hold `panes` (applies to the first tab, as today) or `tabs` (a whole workspace shape that replaces the project's tabs for that launch). The two shipped pane layouts stay.
+**Named layouts** (`layouts` in the file, the ctrl+alt+L cycling, the thumbnails) stay. A layout may hold `panes` (applies to the first agent's tab, or tab 1 when the project has no agent pane) or `tabs` (a whole workspace shape that replaces the project's tabs for that launch). The two shipped pane layouts stay.
 
 ### 4.2 Setup
 
