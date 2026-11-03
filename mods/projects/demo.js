@@ -3,6 +3,7 @@
 // Delete it after use: a leftover file with "view": "launch" launches the project every time the picker opens.
 //   { "view": "list|edit|delete|launch-screen (opens the launch screen; "mainOnly": true on the checkout)|worktrees|backup|duplicate|busy|launch (launches the named project at once)", "project": "api-gateway", "query": "apgw",
 //     "focus": "name", "tab": 1, "pane": 0, "text": "fix login" (the branch box), "prompt": "…" (the prompt box), "tick": true, "confirm": true, "notes": ["…"],
+//     (also "view": "launcher-setup": adds the launcher blocks to the shown layout and switches to it, as the Launcher button does; delete the file right after)
 //     "detail": true|false (show or hide the detail card), "layout": "agent-terminal" (a layout picked for the launch) }
 import * as fs from "fs/promises";
 import { appHome } from "herdr";

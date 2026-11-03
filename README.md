@@ -16,6 +16,27 @@ Then merge `keys.json` into `~/.config/herdr-app/keys.json`.
 
 The picker's **Launcher: add to layout** button writes a copy of the shown layout with three small blocks (beside the sidebar's spaces, the status bar and the tab bar) and switches to it; the button then reads **Launcher: sidebar / status bar / tab bar / off** and each click moves the Projects button to the next place. Each block loads this same `projects` mod with a `slot` prop: that copy draws the button and also runs the auto-layout watcher (it sets up spaces opened outside the picker for auto-layout projects). **Launcher: off** hides every block, and a hidden block's copy may never start, so it turns the watcher off too: keep the button shown somewhere if you rely on auto-layout. A layout made before the launcher moved into this mod (its blocks name `projects-launcher`) is rewritten to load `projects` the next time you click the Launcher button.
 
+## Auto-layout
+
+Auto-layout sets up a space you open outside the picker (the app's New space, or New worktree from its menu) the way the picker would. To turn it on: put the launcher button in the layout (Launcher in the picker's toolbar, any place but off), then switch **Auto-layout** on in the project's editor. Only one project per repo can have it; turning it on moves it from the other with a toast.
+
+When a new space appears (a 2 s poll; switching to a space does nothing, and spaces open at app start are left alone) whose folder is the project's checkout or one of its worktrees, has one tab with one pane, and that pane is a shell or a running agent, the watcher builds the project's tabs into it. A running agent stays and setup runs beside it in a "setup" tab; a shell gets the agent line typed into it. A worktree new to the project also gets `copy` and `worktree.setup`; the checkout gets only `startup.setup`. There is no prompt.
+
+Repos that are not projects can be covered by an `autoLayouts` list at the top level of `projects.json`, and `defaultAgent` fills agent panes in those layouts. Both are JSON-only (no editor):
+
+```json
+{
+  "projects": [],
+  "autoLayouts": [
+    { "repo": "*", "branch": "release", "layout": "deploy" },
+    { "repo": "notes", "layout": "agent-terminal" }
+  ],
+  "defaultAgent": { "agent": "claude", "args": "" }
+}
+```
+
+`repo` is a repo name or `*`, `branch` is optional, `layout` is a pane layout by name. The best match wins: repo and branch, then repo, then `*` with branch, then `*`. These layouts get tabs and panes only, no copy or setup.
+
 ## Projects file
 
 Projects live in `~/.config/herdr-app/data/projects.json`; the editor writes it, and you can edit it by hand. A project's `startup.tabs` is the list of tabs its space opens with. A tab has a `folder` (relative to the project or worktree, or absolute) and either a `command` or `panes`; a pane is an `agent`, a `shell` or a `command`, split `right` or `down` from the previous one, and its `folder` is relative to its tab's folder. Folders are checked before anything is created.

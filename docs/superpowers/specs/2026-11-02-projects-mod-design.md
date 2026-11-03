@@ -36,14 +36,14 @@ It is a personal mod named **`projects`**, started from a copy of cgill27's `pro
 | project-presets | projects |
 |---|---|
 | `mods/project-presets/` | `mods/projects/` |
-| `mods/project-presets-launcher/` | `mods/projects-launcher/` (the button and the resident watcher) |
+| `mods/project-presets-launcher/` | none: the launcher block loads `mods/projects/` with a `slot` prop (the button and the resident watcher) |
 | `data/project-presets.json` | `data/projects.json` |
 | `data/project-presets.log`, `.debug`, `.demo` | `data/projects.log`, `.debug`, `.demo` |
 | shared `project-presets.recent` / `.detail` / `.launcher` | `projects.recent` / `.detail` / `.launcher` |
 | layout block ids `pp-launch-*` | `projects-launch-*` |
 | keys `mod.open:project-presets` | `mod.open:projects` on `ctrl-alt-p` / `cmd-alt-p` (unchanged keys) |
 
-The repo is a folder laid out like the app home (`mods/projects/`, `mods/projects-launcher/`, `keys.json`, `RECIPE.md`, `preview.png`, `test/`), installed by symlink as project-presets recommends.
+The repo is a folder laid out like the app home (`mods/projects/`, `keys.json`, `RECIPE.md`, `preview.png`, `test/`), installed by symlink as project-presets recommends.
 
 ## 4. The data model
 
@@ -127,9 +127,9 @@ Enter on a project no longer launches straight away unless the project has `"qui
 
 `always` mode goes to the same screen with the branch box prefilled by the template. The busy screen that follows lists the steps as today: fetch, worktree add, copy, each setup command (with "see the setup tab" while a long one runs), tabs, agent, prompt.
 
-## 6. The resident watcher (projects-launcher)
+## 6. The resident watcher (the `projects` mod in the launcher block)
 
-The app has no event hooks, so auto-layout for worktrees the picker did not create needs a mod copy that is always in the layout. The launcher block already is one (alive while in the layout, shown or hidden). It gains a watcher:
+The app has no event hooks, so auto-layout for worktrees the picker did not create needs a mod copy that is always in the layout. The resident copy is the `projects` mod itself, loaded by the launcher block with a `slot` prop (there is no separate launcher mod; layouts naming the old `projects-launcher` are migrated on the next Launcher click). Only the copy in the chosen slot watches, so "Launcher: off" turns the watcher off. It gains a watcher:
 
 - `render()` only diffs `spaces()` ids and folders against what it saw and queues a check; no git in render.
 - **Seen at start.** The first list of spaces the copy sees (on app start, mod reload, or the block entering the layout) is taken as already seen and never acted on. Only spaces that appear after that count. This is what keeps the watcher from laying out every open space on launch; the one-pane guard below is the second line of defense, not the first.
@@ -154,7 +154,7 @@ A global `"autoLayouts": [{ "repo": "*", "branch": "release", "layout": "deploy"
 
 ## 8. One build path
 
-`workspace.js` exports `buildWorkspace({ project, folder, prompt, agentTiming, layout, existing, log })` and is the only code that turns a project into app commands. Used by the picker's launch and by the watcher (`existing` describes a space and pane the watcher found; absent for the picker). It owns: folder checks, copy, the setup chain text, `space.new`, `tab.new { space, name, folder, argv }`, pane splits, the agent start for both timings, prompt delivery, `pane.focus` back to the agent. Since the two mods are separate folders, `workspace.js`, `git.js` and `lib.js` live in `mods/projects/` and the launcher imports them by relative path (`../projects/workspace.js`); verify in phase 1 that a cross-folder import loads, else the launcher gets copies kept in sync by the tests. The launch lock becomes shared state (`projects.lock` with a timestamp) rather than a module variable, so the two mods serialize against each other. Mapping notes:
+`workspace.js` exports `buildWorkspace({ project, folder, prompt, agentTiming, layout, existing, log })` and is the only code that turns a project into app commands. Used by the picker's launch and by the watcher (`existing` describes a space and pane the watcher found; absent for the picker). It owns: folder checks, copy, the setup chain text, `space.new`, `tab.new { space, name, folder, argv }`, pane splits, the agent start for both timings, prompt delivery, `pane.focus` back to the agent. Shared code lives in one folder, `mods/projects/`: the picker and the resident copy are the same mod, so no cross-folder import is needed. The launch lock is shared state (`projects.lock` with a timestamp, stale after 25 s) rather than a module variable, so the picker and the watcher serialize. Mapping notes:
 
 - Tab 1: `space.new { name, folder, argv }` where `argv` is the agent command for `with`, or the chain-then-exec line for `after`, with `task` for an `arg` prompt. Later tabs: `tab.new`. Later panes: `herdr-app do pane.split {direction, pane, argv}` with the `inFolder` wrapper as today (`terminal.open` cannot target a pane on 0.1.12, checked).
 - `argv` is the split command, not `sh -c`, so the app's interactive-shell launcher keeps a shell after the command exits.
@@ -192,7 +192,7 @@ Each phase: `node --test test/`, `herdr-app check` on both mods, a run in the ap
 - A marker file decides "new worktree" for `worktree.setup`; its name is excluded via `.git/info/exclude`; a pre-existing worktree counts as new on first open; `copy` never overwrites.
 - Agent panes in layouts inherit the project's first agent, or a top-level `defaultAgent`, or become a shell.
 - Enter is a newline in the prompt box and ctrl+Enter launches; Checkout on the launch screen is the Open as toggle.
-- Shared code lives in `mods/projects/` and the launcher imports it across folders (to verify), with a shared-state lock between the mods.
+- Shared code lives in `mods/projects/`; the launcher block loads the same mod with a `slot` prop, with a shared-state lock between picker and watcher.
 - Multi-line boxes replace `;;` in the editor.
 - `ctrl+alt+T` / ⌘⌥T toggles agent timing on the launch screen.
 - Phase order: model, then launch screen and setup, then watcher.
