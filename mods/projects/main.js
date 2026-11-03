@@ -11,7 +11,7 @@ import { inspect, projectFolder, previewBranch, createWorktree, worktreeSpaceNam
 import { buildWorkspace } from "./workspace.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -286,7 +286,7 @@ export default class ProjectPresets extends View {
     const rows = this.allProjects().map((p) => {
       const score = Math.max(fuzzy(q, p.name), fuzzy(q, p.group), fuzzy(q, basename(p.path)) - 1);
       const folder = projectFolder(p);
-      return { p, score, space: p.template ? undefined : open.find((s) => s.folder === folder), used: recent[p.path] ?? 0 };
+      return { p, score, space: p.template ? undefined : open.find((s) => s.folder === folder) ?? open.find((s) => spaceShows(s.folder, folder)), used: recent[p.path] ?? 0 };
     }).filter((r) => r.score >= 0);
     rows.sort((a, b) => q
       ? b.score - a.score

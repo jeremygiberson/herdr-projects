@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows } from "../mods/projects/lib.js";
 
 test("fuzzy matches subsequences and ranks tighter matches higher", () => {
   assert.equal(fuzzy("zzz", "herdr"), -1);
@@ -537,6 +537,15 @@ test("a panes layout replaces the panes of the tab that holds the agent", () => 
   assert.deepEqual(tabs[1].panes.map((x) => [x.type, x.agent]), [["agent", "claude"], ["shell", ""]]);
   assert.equal(tabs[1].name, "ai");
   assert.doesNotThrow(() => tabPlan(tabs));
+});
+
+test("spaceShows: a space shows a project in its folder or below it, not in a sibling sharing a prefix", () => {
+  assert.equal(spaceShows("/r/api", "/r/api"), true);
+  assert.equal(spaceShows("/r/api/web", "/r/api"), true);
+  assert.equal(spaceShows("/r/api/web", "/r/api/"), true);
+  assert.equal(spaceShows("/r/api2", "/r/api"), false);
+  assert.equal(spaceShows("/r", "/r/api"), false);
+  assert.equal(spaceShows(undefined, "/r/api"), false);
 });
 
 test("normalize skips blank legacy string tabs", () => {

@@ -1,7 +1,7 @@
 // Everything that touches git. `log(msg)` reports progress to the picker.
 import { exec as rawExec, run, spaces, home } from "herdr";
 import { log } from "./log.js";
-import { slug, branchName, expandHome, expand, basename, dateStamp, timeStamp, parseWorktrees } from "./lib.js";
+import { slug, branchName, expandHome, expand, basename, dateStamp, timeStamp, parseWorktrees, spaceShows } from "./lib.js";
 
 /** exec, logged in debug mode: command, folder, exit code and the first line of stderr. */
 async function exec(command, args = [], options = {}) {
@@ -148,7 +148,12 @@ async function realPath(p) {
   } catch { return p; }
 }
 
-export const findSpace = (project) => spaces().find((s) => !s.machine && s.folder === projectFolder(project));
+/** The open space showing the project: one in its folder, else one below it (a first tab with a folder opens there). */
+export function findSpace(project) {
+  const folder = projectFolder(project);
+  const local = spaces().filter((s) => !s.machine);
+  return local.find((s) => s.folder === folder) ?? local.find((s) => spaceShows(s.folder, folder));
+}
 
 /** The sidebar name for a worktree's space, from the project's template; falls back to "<name> · <branch>". */
 export function worktreeSpaceName(project, wt) {

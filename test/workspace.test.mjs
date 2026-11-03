@@ -214,3 +214,10 @@ test("folders expand ~ and $VAR", async () => {
   await W.buildWorkspace({ project: p, folder: dir, name: "S", tabs: p.startup.tabs, prompt: "", log: () => {} });
   assert.equal(state.tabsMade[0].folder, `${dir}/sub`);
 });
+
+test("the repo's space counts as open when its space shows a folder below the repo", async () => {
+  const dir = repo(); const wt = scratch("pp-wt");
+  state.spaces = [{ id: "s", folder: `${dir}/web`, machine: null }];
+  await build(project(dir, { worktree: { repoSpace: true } }), wt, "x");
+  assert.equal(spaceNews().length, 1);
+});

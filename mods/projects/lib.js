@@ -66,6 +66,14 @@ export function branchName(template, vars) {
 
 export const basename = (p) => String(p).replace(/[\\/]+$/, "").split(/[\\/]/).pop();
 
+/** Whether a space in `spaceFolder` shows the project in `projectFolder`: the same folder or one below it
+ *  (a project whose first tab opens in a subfolder). "/r/api2" does not show "/r/api". */
+export function spaceShows(spaceFolder, projectFolder) {
+  const f = String(projectFolder ?? "").replace(/\/+$/, "");
+  const s = String(spaceFolder ?? "");
+  return Boolean(f) && (s === f || s.startsWith(f + "/"));
+}
+
 /** "~/x" and "$HOME/x" to an absolute path. */
 export function expandHome(p, home) {
   return String(p ?? "").replace(/^[\r\n]+|[\r\n]+$/g, "").replace(/^(~|\$HOME)(?=\/|$)/, home).replace(/[\\/]+$/, "");

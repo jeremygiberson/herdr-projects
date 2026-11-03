@@ -292,6 +292,19 @@ test("an already-open space is focused instead of opening another", async () => 
   assert.equal(state.closed, 1);
 });
 
+test("a space opened in a folder below the project's is its space: focused on Enter and listed as open", async () => {
+  const dir = makeRepo();
+  const { v, cx } = await open([proj("demo", dir, { worktree: { mode: "never" } }), proj("other", `${dir}2`)]);
+  state.spaces = [{ id: "sp-web", folder: `${dir}/web`, machine: null }, { id: "sp-sib", folder: `${dir}2-x`, machine: null }];
+  v.refreshSnap();
+  assert.equal(v.rows().find((r) => r.p.name === "demo").space?.id, "sp-web");
+  assert.equal(v.rows().find((r) => r.p.name === "other").space, undefined, "a sibling sharing a prefix is not its space");
+  v.at = v.rows().findIndex((r) => r.p.name === "demo");
+  enter(v);
+  await cx.settle();
+  assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["space.select", "sp-web"]]);
+});
+
 test("a folder that is not a git checkout shows the error and Escape returns", async () => {
   const { v, cx } = await launchFirst([proj("demo", scratch(), { worktree: { mode: "never" } })]);
   assert.match(v.error, /not a git checkout/);
