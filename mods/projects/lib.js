@@ -427,7 +427,11 @@ export function layoutRects(layout) {
 }
 
 /** What Enter does for a worktree mode, and the label of the main button. */
-export const enterAction = (mode) => mode === "never" ? ["opens the checkout", "Open checkout"] : mode === "always" ? ["creates a new worktree", "Create worktree"] : ["asks for a branch name", "Open…"];
+export const enterAction = (mode, quickLaunch = false) => quickLaunch && mode === "never" ? ["opens the checkout at once", "Open checkout"]
+  : quickLaunch && mode === "always" ? ["creates a new worktree at once", "Create worktree"]
+  : mode === "never" ? ["opens the launch screen for the checkout", "Open…"]
+  : mode === "always" ? ["opens the launch screen for a new worktree", "Open…"]
+  : ["opens the launch screen and asks for a branch name", "Open…"];
 
 // ---- space colors -----------------------------------------------------------------------------
 

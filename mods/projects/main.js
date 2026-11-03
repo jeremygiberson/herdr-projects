@@ -12,7 +12,7 @@ import { buildWorkspace } from "./workspace.js";
 import { copyInto, isNewWorktree, markerPath, excludeMarker } from "./setup.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupVars, setupChain, expand } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupVars, setupChain, expand, setupSummary } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -47,14 +47,16 @@ const CARD = 340; // the detail card's width
 const SECTIONS = [["project", "Project"], ["worktree", "Worktree"], ["git", "Git"], ["startup", "Startup"]];
 const SECTION_FIELDS = {
   project: ["name", "path", "group", "description"],
-  worktree: ["branchTemplate", "root", "spaceName"],
+  worktree: ["branchTemplate", "root", "spaceName", "copy", "wtSetup"],
   git: ["remote", "base"],
   startup: ["setup"],
 };
 const MODES = ["ask", "always", "never"];
 const MODE_HELP = { ask: "ask for a branch name", always: "always a new worktree", never: "open the checkout" };
 
-// Editor fields: text ones keep an InputState, the rest are buttons.
+// A list as box text; an old entry like "a ;; b" shows as two lines, as saving would store it.
+const lines = (list) => joinList(splitList(joinList(list)));
+// Editor fields: text ones keep an InputState (a TextareaState when the last element is true), the rest are buttons.
 const TEXT = [
   ["name", "Name", (p) => p.name, (p, v) => (p.name = v)],
   ["path", "Folder", (p) => p.path, (p, v) => (p.path = v)],
@@ -63,9 +65,11 @@ const TEXT = [
   ["branchTemplate", "Branch name", (p) => p.worktree.branchTemplate, (p, v) => (p.worktree.branchTemplate = v), "{user} {date} {slug} {repo} {project}"],
   ["root", "Worktree folder", (p) => p.worktree.root, (p, v) => (p.worktree.root = v), "{repo} {branch} plus the above"],
   ["spaceName", "Space name", (p) => p.worktree.spaceName, (p, v) => (p.worktree.spaceName = v), "the sidebar name: {name} {branch} {slug} {user} {date} {repo}"],
+  ["copy", "Copy from the checkout", (p) => lines(p.worktree.copy), (p, v) => (p.worktree.copy = splitList(v)), "one path or glob per line, relative to the checkout; existing files are kept", true],
+  ["wtSetup", "Worktree setup", (p) => lines(p.worktree.setup), (p, v) => (p.worktree.setup = splitList(v)), "one command per line; runs once, when the worktree is new", true],
   ["remote", "Remote", (p) => p.git.remote, (p, v) => (p.git.remote = v)],
   ["base", "Base branch", (p) => p.git.base, (p, v) => (p.git.base = v)],
-  ["setup", "Setup commands", (p) => joinList(p.startup.setup), (p, v) => (p.startup.setup = splitList(v)), "separate with ;; — each limited to 30 s"],
+  ["setup", "Setup commands", (p) => lines(p.startup.setup), (p, v) => (p.startup.setup = splitList(v)), "one command per line; runs on every open, after the worktree setup", true],
 ];
 // The Startup section's boxes for a tab and for a pane: [field, label, note]. Each tab or pane object gets its own (see boxFor).
 const TAB_BOXES = [
@@ -557,8 +561,9 @@ export default class ProjectPresets extends View {
     this.draft = JSON.parse(JSON.stringify(project));
     this.error = null;
     this.confirmDelete = false;
-    this.fields = TEXT.map(([key, , get]) => {
-      const s = InputState.new({ value: get(this.draft) ?? "" });
+    this.fields = TEXT.map(([key, , get, , , multiline]) => {
+      const s = multiline ? TextareaState.new({ value: get(this.draft) ?? "", rows: 3 }) : InputState.new({ value: get(this.draft) ?? "" });
+      if (multiline) s.set_auto_grow(3, 8);
       s.on("focus", () => { this.field = key; this.focused = s; });
       return [key, s];
     });
@@ -767,7 +772,7 @@ export default class ProjectPresets extends View {
   }
 
   /** The Startup section: setup commands, agent timing, the tabs list and the selected tab's and pane's fields. */
-  renderTabs(t, cx, field, input, label) {
+  renderTabs(t, cx, field, input, label, toggle) {
     const d = this.draft;
     const tab = this.tab();
     const pane = this.pane();
@@ -786,7 +791,10 @@ export default class ProjectPresets extends View {
       field("setup"),
       h_flex().pt(8).gap(8).items_center()
         .child(act("pp-timing", `Agent timing: ${timing ? "with setup" : "after setup"}`, () => (d.startup.agentTiming = timing ? "after" : "with")))
-        .child(dim(timing ? "agents start while the setup commands run" : "agents start once the setup commands finish")),
+        .child(dim(timing ? "agent starts at once; setup runs in its own tab" : "agent starts once the setup commands finish")),
+      h_flex().pt(8).gap(8)
+        .child(toggle("pp-quicklaunch", "Quick launch: Enter opens at once with these defaults", d.quickLaunch, (v) => (d.quickLaunch = v)))
+        .child(toggle("pp-quicksetup", "Run setup inline (30 s per command, blocks the popup)", d.startup.quickSetup, (v) => (d.startup.quickSetup = v))),
       label("Tabs"),
       d.startup.tabs.length
         ? v_flex().gap(3).children(d.startup.tabs.map((x, i) => row(`pp-tab-${i}`, i === this.tabAt, [
@@ -1219,7 +1227,8 @@ export default class ProjectPresets extends View {
       .child(v_flex().gap(3)
         .child(kv("Agent", program?.name ?? (name || "plain shell")))
         .child(kv("Tabs", tabLabels(p.startup.tabs).join(" · ")))
-        .child(kv("Worktrees", enterAction(p.worktree.mode)[0]))
+        .child(kv("Setup", setupSummary(p)))
+        .child(kv("Worktrees", enterAction(p.worktree.mode, p.quickLaunch)[0]))
         .when(Boolean(p.group), (el) => el.child(kv("Group", p.group))))
       .child(h_flex().gap(8).items_center().flex_wrap()
         .child(this.button(t, "pp-use", "Use template", true, () => { this.duplicateSelected(); cx.notify(); })));
@@ -1239,7 +1248,7 @@ export default class ProjectPresets extends View {
       .child(div().flex_1().min_w(0).text_color(t.foreground).child(v));
     const current = this.layoutNameFor(p);
     const choices = [{ name: "", label: "Project's tabs", panes: p.startup.tabs[0]?.panes ?? [] }, ...this.layouts];
-    const [what, openLabel] = enterAction(p.worktree.mode);
+    const [what, openLabel] = enterAction(p.worktree.mode, p.quickLaunch);
     const shown = choices.find((c) => c.name === current);
     const dirtyText = info == null ? "…" : info.dirty ? `${info.dirty} file${info.dirty > 1 ? "s" : ""} modified` : "clean";
     return card
@@ -1252,6 +1261,7 @@ export default class ProjectPresets extends View {
         .when(Boolean(p.description), (el) => el.child(div().text_size(12).text_color(t.dim).child(p.description)))
         .child(kv("Agent", h_flex().gap(6).items_center().child(this.agentIcon(t, p, 14)).child(div().child(program?.name ?? (name || "plain shell")))))
         .child(kv("Tabs", tabLabels(p.startup.tabs).join(" · ")))
+        .child(kv("Setup", setupSummary(p)))
         .when(Boolean(p.group), (el) => el.child(kv("Group", p.group)))
         .when(this.gitInfo, (el) => el.child(kv("Branch", info?.branch ?? "…")).child(kv("Changes", info?.dirty ? div().text_color(t.working).child(dirtyText) : dirtyText)).child(kv("Worktrees", info == null ? "…" : String(info.worktrees))))
         .child(kv("Last opened", ago(this.snap.recent[p.path]))))
@@ -1444,14 +1454,15 @@ export default class ProjectPresets extends View {
       .child(div().text_size(11.5).text_color(t.dim).child(text))
       .when(Boolean(note), (el) => el.child(div().text_size(10.5).text_color(t.muted ?? t.dim).child(note)));
     this.fieldOrder = []; // the boxes in the order shown, for Tab (see focusNextField)
-    const input = (state, name, note) => {
+    const input = (state, name, note, multiline = false) => {
       this.fieldOrder.push(state);
+      const box = multiline ? Textarea.new(state).w_full().px(10).py(6) : Input.new(state).h(34).px(10);
       return v_flex().child(label(name, note))
-        .child(Input.new(state).h(34).px(10).rounded(8).border_1().border_color(this.focused === state ? t.accent : t.input).bg(t.background).text_size(12.8).text_color(t.foreground));
+        .child(box.rounded(8).border_1().border_color(this.focused === state ? t.accent : t.input).bg(t.background).text_size(12.8).text_color(t.foreground));
     };
     const field = (key) => {
-      const [, name, , , note] = TEXT.find(([k]) => k === key);
-      return input(this.fieldState(key), name, note);
+      const [, name, , , note, multiline] = TEXT.find(([k]) => k === key);
+      return input(this.fieldState(key), name, note, Boolean(multiline));
     };
     const toggle = (id, text, value, set) => this.button(t, id, `${value ? "✓" : "○"} ${text}`, false, () => { set(!value); cx.notify(); });
     const sections = {
@@ -1470,6 +1481,8 @@ export default class ProjectPresets extends View {
         field("branchTemplate"),
         field("root"),
         field("spaceName"),
+        field("copy"),
+        field("wtSetup"),
         h_flex().pt(12).gap(8).items_center()
           .child(toggle("pp-repospace", "Open the repo's space first", d.worktree.repoSpace, (v) => (d.worktree.repoSpace = v)))
           .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).child("worktrees then nest under it in the sidebar")),
@@ -1481,7 +1494,7 @@ export default class ProjectPresets extends View {
         field("remote"),
         field("base"),
       ],
-      startup: () => this.renderTabs(t, cx, field, input, label),
+      startup: () => this.renderTabs(t, cx, field, input, label, toggle),
     };
     return v_flex().gap(0).min_h(0)
       .child(this.title(t, { add: "Add project", edit: "Edit project", duplicate: "Duplicate project", template: "Edit template", fromTemplate: "New project from the template" }[this.editKind ?? "add"], `Tab next field · ${key("s", "ctrl")} save · ${backKey()} back · Esc closes`))

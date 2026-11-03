@@ -269,10 +269,13 @@ test("layoutRects divides the pane each split comes from", () => {
 });
 
 test("enterAction describes each worktree mode", () => {
-  assert.deepEqual(enterAction("never"), ["opens the checkout", "Open checkout"]);
-  assert.deepEqual(enterAction("always"), ["creates a new worktree", "Create worktree"]);
-  assert.deepEqual(enterAction("ask"), ["asks for a branch name", "Open…"]);
-  assert.deepEqual(enterAction(undefined), ["asks for a branch name", "Open…"]);
+  assert.deepEqual(enterAction("never"), ["opens the launch screen for the checkout", "Open…"]);
+  assert.deepEqual(enterAction("always"), ["opens the launch screen for a new worktree", "Open…"]);
+  assert.deepEqual(enterAction("ask"), ["opens the launch screen and asks for a branch name", "Open…"]);
+  assert.deepEqual(enterAction(undefined), ["opens the launch screen and asks for a branch name", "Open…"]);
+  assert.deepEqual(enterAction("never", true), ["opens the checkout at once", "Open checkout"]);
+  assert.deepEqual(enterAction("always", true), ["creates a new worktree at once", "Create worktree"]);
+  assert.deepEqual(enterAction("ask", true), ["opens the launch screen and asks for a branch name", "Open…"]);
 });
 
 test("spaceColor reads herdr's stored names and hex colors, and defaults to teal", () => {

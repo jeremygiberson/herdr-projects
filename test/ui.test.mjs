@@ -752,16 +752,16 @@ test("the detail card describes the highlighted project", async () => {
   await v.loadInfo(cx);
   const t = texts(v);
   for (const s of ["demo", "agent working", "Agent", "Claude Code", "Branch", "main", "Changes", "1 file modified", "Worktrees", "Last opened", "never",
-    "Enter creates a new worktree and opens the project's tabs.", "Create worktree", "Checkout", "LAYOUT"]) assert.ok(t.includes(s), s);
+    "Enter opens the launch screen for a new worktree and opens the project's tabs.", "Open…", "Checkout", "LAYOUT"]) assert.ok(t.includes(s), s);
 });
 
 test("the card follows the highlight and says what each mode does", async () => {
   const { v, cx } = await open([proj("a", "/r/a", { worktree: { mode: "never" } }), proj("b", "/r/b", { worktree: { mode: "ask" } })]);
-  assert.match(texts(v), /Enter opens the checkout and opens the project's tabs\./);
+  assert.match(texts(v), /Enter opens the launch screen for the checkout and opens the project's tabs\./);
   press(v, cx, "down");
-  assert.match(texts(v), /Enter asks for a branch name and opens the project's tabs\./);
+  assert.match(texts(v), /Enter opens the launch screen and asks for a branch name and opens the project's tabs\./);
   v.layoutPick = "agent-terminal";
-  assert.match(texts(v), /Enter asks for a branch name and opens agent \+ terminal below\./);
+  assert.match(texts(v), /Enter opens the launch screen and asks for a branch name and opens agent \+ terminal below\./);
   assert.ok(texts(v).includes("Open…"));
 });
 
@@ -1675,4 +1675,37 @@ test("Shift+Enter on the list opens the launch screen on the checkout path", asy
   const { v, cx } = await open([proj("api", realpathSync(makeRepo()), { worktree: { mode: "ask" } })]);
   press(v, cx, "enter", { shift: true }); await cx.settle();
   assert.deepEqual([v.mode, v.launch.worktree], ["launch", false]);
+});
+
+test("the editor shows copy and worktree setup as one path or command per line and saves them as lists", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { worktree: { copy: [".env"], setup: ["npm ci"] }, startup: { setup: ["a ;; b"] } })]);
+  press(v, cx, "e", { alt: true }); v.showSection("worktree");
+  assert.equal(v.fieldState("copy").value(), ".env"); assert.equal(v.fieldState("wtSetup").value(), "npm ci");
+  v.fieldState("copy").set_value(".env\n.claude/*"); v.fieldState("wtSetup").set_value("npm ci\nnpm run build");
+  v.showSection("startup"); assert.equal(v.fieldState("setup").value(), "a\nb");
+  await v.save(cx);
+  const saved = JSON.parse(readFileSync(dataFile(), "utf8")).projects[0];
+  assert.deepEqual([saved.worktree.copy, saved.worktree.setup, saved.startup.setup], [[".env", ".claude/*"], ["npm ci", "npm run build"], ["a", "b"]]);
+});
+test("a two-command startup setup round-trips through the editor unchanged", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir, { startup: { setup: ["a", "b"] } })]);
+  press(v, cx, "e", { alt: true });
+  await v.save(cx);
+  assert.deepEqual(JSON.parse(readFileSync(dataFile(), "utf8")).projects[0].startup.setup, ["a", "b"]);
+});
+test("quick launch and inline setup toggles are saved", async () => {
+  const dir = realpathSync(makeRepo());
+  const { v, cx } = await open([proj("api", dir)]);
+  press(v, cx, "e", { alt: true }); v.showSection("startup");
+  for (const id of ["pp-quicklaunch", "pp-quicksetup"]) findAll(rendered(v), (e) => e.op?.("id")?.[0] === id)[0].op("on_click")[0]({}, cx);
+  await v.save(cx);
+  const saved = JSON.parse(readFileSync(dataFile(), "utf8")).projects[0];
+  assert.deepEqual([saved.quickLaunch, saved.startup.quickSetup], [true, true]);
+});
+test("the card summarises setup", async () => {
+  const { v } = await open([proj("a", "/r/a", { worktree: { copy: [".env"], setup: ["x", "y"] }, startup: { agentTiming: "after" } }), proj("b", "/r/b")]);
+  assert.match(texts(v), /1 copy · 2 setup · agent after setup/);
+  v.at = 1; assert.match(texts(v), /no setup/);
 });
