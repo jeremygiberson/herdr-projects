@@ -34,7 +34,7 @@ const mac = () => platformNow === "macos";
 let homeDir;
 const homeOf = () => (homeDir ??= home());
 const key = (letter, other = "alt") => (mac() ? `⌘${letter.toUpperCase()}` : `${other}+${letter}`);
-/** The way back a screen. Herdr closes a popup on Esc itself, and it owns cmd+B on a Mac, so a Mac gets the cmd+alt chord (like the layout and details keys). */
+/** The way back a screen besides Esc (which reaches the mod as the projects.escape command, see init). Herdr owns cmd+B on a Mac, so a Mac gets the cmd+alt chord (like the layout and details keys). */
 const backKey = () => (mac() ? "⌘⌥B" : "alt+b");
 // Herdr binds a bare alt+l to moving between panes, so the layout key needs ctrl (⌘ on macOS) as well, like the open key.
 const FOOTER_SIZE = 12;
@@ -120,8 +120,8 @@ export default class ProjectPresets extends View {
     // It goes through keys() so Esc behaves the same in one place.
     cx.spawn(async (cx) => {
       for (;;) {
-        const c = await nextCommand();
         try {
+          const c = await nextCommand();
           if (c === "escape") this.keys({ key: "escape", modifiers: { control: false, alt: false, platform: false, shift: false } }, cx);
         } catch (e) { this.fail("escape", e); }
         cx.notify();
@@ -147,14 +147,18 @@ export default class ProjectPresets extends View {
     this.at = 0;
     this.error = null;
     this.notes = [];
-    // A launch request from another mod (props().launch): applied once the list has loaded (see reload).
+    // A launch request from another mod (props().launch): applied once the list has loaded (see reload). `request` keeps
+    // it for the dialog's lifetime, so the list offers it again until a launch succeeds; `pending` is set while the
+    // list waits for a project to be picked for it.
+    this.request = null;
     this.pending = null;
     this.banner = null;
-    this.backTo = props()?.backTo ?? null;
+    const b = props()?.backTo;
+    this.backTo = typeof b?.mod === "string" && b.mod ? b : null;
     const rawLaunch = props()?.launch;
     if (rawLaunch) {
       const r = parseLaunch(rawLaunch);
-      if (r.ok) this.pending = r.launch; else this.error = r.error;
+      if (r.ok) this.request = this.pending = r.launch; else this.error = r.error;
     }
     this.handle = cx.focus_handle();
 
@@ -185,8 +189,23 @@ export default class ProjectPresets extends View {
   fail(where, e) {
     logError(where, e);
     this.error = `${where}: ${e?.message ?? e}`;
-    if (this.mode === "launch") this.mode = "list";
+    if (this.mode === "launch") { this.mode = "list"; this.offerRequest(); }
     this.cx?.notify();
+  }
+
+  /** Back on the list with a launch request that hasn't launched yet: picking a project prefills it again. */
+  offerRequest() {
+    if (!this.request) return;
+    this.pending = this.request;
+    this.banner = launchBanner(this.request);
+  }
+
+  /** Back to the list from a sub-screen. */
+  toList() {
+    this.mode = "list";
+    this.error = null;
+    this.offerRequest();
+    this.search.focus();
   }
 
   reload(cx, after) {
@@ -300,6 +319,18 @@ export default class ProjectPresets extends View {
     this.closing = true;
     if (this.overlay) closeOverlay(this.overlay);
     else run("overlay.close", {}); // opened without an overlay id (a command line open): close the top one
+  }
+
+  /** Esc out of the picker: closes it, and reopens the mod that opened it with a launch request (props.backTo). */
+  leave() {
+    this.dismiss();
+    if (this.backTo) openOverlay({ mod: this.backTo.mod, kind: "dialog", width: 0.8, height: 0.8, props: this.backTo.props ?? {} });
+  }
+
+  /** A launch went through: the request is done, and the popup closes. */
+  launched() {
+    this.request = this.pending = null;
+    this.dismiss();
   }
 
   /** herdr's hook for when the popup is going: stop background work. */
@@ -447,7 +478,7 @@ export default class ProjectPresets extends View {
   footer(t, p, list) {
     const hints = list
       ? [["Enter", "opens"], ["Shift+Enter", "checkout"], [key("n"), "add"], [key("u"), "duplicate"], [key("x"), "import/export"], [key("e"), "edit"], [key("w"), "worktrees"], [key("d"), "delete"], [LAYOUT_HINT(), "layout"], [DETAIL_HINT(), "details"]]
-      : [["ctrl+⏎", "launches"], [backKey(), "back"], ["Esc", "closes"]];
+      : [["ctrl+⏎", "launches"], [backKey(), "back"], ["Esc", this.backTo ? "returns" : "back"]];
     const current = this.layoutNameFor(p);
     const lit = this.layoutLit;
     const choice = (name, label) => {
@@ -496,7 +527,7 @@ export default class ProjectPresets extends View {
     return row.children(highlightRuns(name, at).map((r) => r.hit ? div().font_bold().text_color(t.accent).child(r.text) : div().child(r.text)));
   }
 
-  /** Opens the launch screen for the pending launch request, prefilled, then forgets the request. */
+  /** Opens the launch screen for the pending launch request, prefilled. The request stays in `request` (see offerRequest). */
   openPending(p) {
     const l = this.pending;
     this.pending = null;
@@ -523,13 +554,16 @@ export default class ProjectPresets extends View {
     this.target = p;
     this.mode = "launch";
     this.error = null;
-    this.launch = { worktree: prefill ? true : !mainOnly && p.worktree.mode !== "never", agentTiming: p.startup.agentTiming, existing: false };
+    // verbatim: the branch box holds a launch request's branch, used as is (not fed to the template) until it is edited.
+    this.launch = { worktree: prefill ? true : !mainOnly && p.worktree.mode !== "never", agentTiming: p.startup.agentTiming, existing: false, verbatim: false };
     this.nameInput = null;
     this.preview = "";
     if (this.launch.worktree) this.makeNameInput();
     this.promptBox = TextareaState.new({ placeholder: "First prompt (optional)", value: this.leadPane(p)?.prompt ?? "", rows: 3 });
     this.promptBox.set_auto_grow(3, 8);
     if (prefill) {
+      this.launch.verbatim = true;
+      this.launch.verbatimText = prefill.branch;
       this.nameInput.set_value(prefill.branch);
       if (prefill.prompt != null) this.promptBox.set_value(prefill.prompt);
       this.launch.existing = prefill.existing;
@@ -541,7 +575,11 @@ export default class ProjectPresets extends View {
 
   makeNameInput() {
     this.nameInput = InputState.new({ placeholder: "branch name, e.g. fix login (empty: use the time)" });
-    this.nameInput.on("change", (_e, cx) => this.refreshPreview(cx));
+    this.nameInput.on("change", (_e, cx) => {
+      // An edit of a prefilled branch makes it ordinary text again (the template applies without a slash).
+      if (this.launch.verbatim && this.nameInput.value() !== this.launch.verbatimText) this.launch.verbatim = false;
+      this.refreshPreview(cx);
+    });
     this.nameInput.on("submit", () => this.launchNow());
     this.refreshPreview(this.cx);
   }
@@ -567,17 +605,19 @@ export default class ProjectPresets extends View {
       prompt: this.promptBox.value().trim(),
       agentTiming: this.launchHasSetup() ? this.launch.agentTiming : "with",
       existing: this.launch.existing,
+      verbatim: this.launch.verbatim,
     });
   }
 
   refreshPreview(cx) {
     const p = this.target;
     const text = this.nameInput.value();
+    const verbatim = Boolean(this.launch?.verbatim || this.launch?.existing);
     // Answers can come back out of order: only the latest request may set the preview.
     const seq = (this.previewSeq = (this.previewSeq ?? 0) + 1);
     cx?.spawn(async (cx) => {
       try {
-        const branch = await previewBranch(p, text);
+        const branch = await previewBranch(p, text, { verbatim });
         if (seq !== this.previewSeq) return;
         this.preview = branch;
         this.error = null;
@@ -590,7 +630,7 @@ export default class ProjectPresets extends View {
     cx?.notify();
   }
 
-  start(p, { worktree, branchText = "", prompt = this.leadPane(p)?.prompt ?? "", agentTiming = p.startup.agentTiming, pick = this.layoutNameFor(p), existing: checkout = false } = {}) {
+  start(p, { worktree, branchText = "", prompt = this.leadPane(p)?.prompt ?? "", agentTiming = p.startup.agentTiming, pick = this.layoutNameFor(p), existing: checkout = false, verbatim = false } = {}) {
     this.mode = "busy";
     this.notes = [];
     this.error = null;
@@ -603,12 +643,13 @@ export default class ProjectPresets extends View {
         const existing = findSpace(p);
         if (!worktree && existing) {
           setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
-          this.dismiss();
+          this.launched();
           return run("space.select", { id: existing.id });
         }
-        const { folder, name, chain, steps, env, marker, open } = await this.prepareLaunch(p, { worktree, branchText, existing: checkout }, log);
+        const { folder, name, chain, steps, env, marker, open } = await this.prepareLaunch(p, { worktree, branchText, existing: checkout, verbatim }, log);
         if (open) {
-          this.dismiss();
+          setShared(RECENT, { ...(shared(RECENT) ?? {}), [p.path]: Date.now() });
+          this.launched();
           return run("space.select", { id: open.id });
         }
         const quick = p.startup.quickSetup;
@@ -626,7 +667,7 @@ export default class ProjectPresets extends View {
         if (prompt && first?.promptMode === "send" && agentTiming === "with") log("Waiting for the agent to be ready for its prompt…");
         // Stay open until the prompt is sent: closing the popup cancels this task.
         await buildWorkspace({ project: p, folder, name, tabs, prompt, agentTiming, chain: quick ? "" : chain, log });
-        this.dismiss();
+        this.launched();
       } catch (e) {
         logError("open project", e);
         this.error = e.message;
@@ -637,16 +678,22 @@ export default class ProjectPresets extends View {
 
   /** The worktree (created, copied into, chained) or the prepared checkout: { folder, name, chain, steps, env, marker }
    *  (see prepareSetup). */
-  async prepareLaunch(p, { worktree, branchText, existing = false }, log) {
+  async prepareLaunch(p, { worktree, branchText, existing = false, verbatim = false }, log) {
     const main = projectFolder(p);
     if (!worktree) {
       await prepareMain(p, log);
       const setup = await prepareSetup({ project: p, folder: main, isWorktree: false, branch: (await inspect(main)).branch, repo: basename(main), home: home(), log });
       return { folder: main, name: p.name, ...setup };
     }
-    const wt = await createWorktree(p, branchText, log, { existing });
+    const wt = await createWorktree(p, branchText, log, { existing, verbatim });
     // A reused worktree that already has a space is only selected: no setup touches it first.
-    const open = wt.reused ? spaces().find((s) => !s.machine && s.folder === wt.folder) : undefined;
+    // A worktree found by its branch has git's real path; a space may show it through a symlink.
+    let open;
+    if (wt.reused) {
+      const local = spaces().filter((s) => !s.machine);
+      open = local.find((s) => s.folder === wt.folder);
+      for (const s of open ? [] : local) if ((await realPath(s.folder)) === wt.folder) { open = s; break; }
+    }
     if (open) return { open };
     const setup = await prepareSetup({ project: p, folder: wt.folder, isWorktree: true, branch: wt.branch, repo: wt.vars.repo, home: home(), log });
     return { folder: wt.folder, name: worktreeSpaceName(p, wt), ...setup };
@@ -1197,7 +1244,7 @@ export default class ProjectPresets extends View {
   renderBackup(t, cx) {
     const confirmAction = this.backupConfirm;
     return v_flex().gap(10)
-      .child(this.title(t, "Import and export config", `${backKey()} back · Esc closes`))
+      .child(this.title(t, "Import and export config", `${backKey()} or Esc back`))
       .child(div().text_size(12).text_color(t.dim).child("Export saves your project list, layouts and settings to one file. Import brings them back, on this machine or another. Paths under your home folder are saved as ~, so an exported file works on a machine with a different user name."))
       .child(div().text_size(11.5).text_color(t.dim).child("File"))
       .child(h_flex().gap(8).items_center()
@@ -1224,14 +1271,11 @@ export default class ProjectPresets extends View {
     // Esc arrives here as the projects.escape command (keys.json), alt+b as a key. (Not a bracket key: herdr binds alt-[ and alt-] to tabs.)
     const back = k === "b" && mod;
     if (k === "escape" || back) {
-      if (this.mode === "launch" && this.backTo) {
-        this.dismiss();
-        openOverlay({ mod: this.backTo.mod, kind: "dialog", width: 0.8, height: 0.8, props: this.backTo.props ?? {} });
-        return;
-      }
-      if (this.mode === "list") { if (back) return; this.dismiss(); }
+      // Esc on the list, or on the launch screen of a request from another mod, leaves (back to that mod); alt+b only steps back.
+      if (this.mode === "list") { if (back) return; this.leave(); }
       else if (this.mode === "busy" && !this.error) { if (back) return; this.dismiss(); } // closing the popup cancels the running task
-      else { this.mode = "list"; this.error = null; this.search.focus(); }
+      else if (this.mode === "launch" && this.backTo && !back) this.leave();
+      else this.toList();
     } else if (this.mode === "list") {
       const n = this.rows().length;
       if (k === "down" && n) { this.at = (this.at + 1) % n; this.revealRow(); }
@@ -1560,7 +1604,7 @@ export default class ProjectPresets extends View {
       .when(w.locked, (el) => el.child(div().text_size(11).text_color(t.blocked).child("locked")))
       .child(div().text_size(11).text_color(w.merged ? t.done : t.dim).child(w.merged ? "merged" : "unmerged"));
     return v_flex().gap(10).min_h(0)
-      .child(this.title(t, `Worktrees · ${this.target.name}`, `${backKey()} back · Esc closes`))
+      .child(this.title(t, `Worktrees · ${this.target.name}`, `${backKey()} or Esc back`))
       .child(h_flex().h(36).flex_none().px(10).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
         .child(Input.new(this.wtSearch).flex_1().h_full().text_size(12.8).text_color(t.foreground)))
       .when(Boolean(this.error), (el) => el.child(div().text_size(12).text_color(t.blocked).child(this.error)))
@@ -1590,7 +1634,7 @@ export default class ProjectPresets extends View {
     const openAs = (worktree) => () => { this.setOpenAs(worktree); cx.notify(); };
     const setup = this.launchHasSetup();
     return v_flex().gap(10)
-      .child(this.title(t, `Open · ${p.name}`, `${backKey()} back · Esc closes`))
+      .child(this.title(t, `Open · ${p.name}`, this.backTo ? `${backKey()} back · Esc returns` : `${backKey()} or Esc back`))
       .child(row("Open as", h_flex().gap(8)
         .child(this.button(t, "pp-open-worktree", "Worktree", l.worktree, openAs(true)))
         .child(this.button(t, "pp-open-checkout", "Checkout", !l.worktree, openAs(false)))))
@@ -1682,7 +1726,7 @@ export default class ProjectPresets extends View {
       startup: () => this.renderTabs(t, cx, field, input, label, toggle),
     };
     return v_flex().gap(0).min_h(0)
-      .child(this.title(t, { add: "Add project", edit: "Edit project", duplicate: "Duplicate project", template: "Edit template", fromTemplate: "New project from the template" }[this.editKind ?? "add"], `Tab next field · ${key("s", "ctrl")} save · ${backKey()} back · Esc closes`))
+      .child(this.title(t, { add: "Add project", edit: "Edit project", duplicate: "Duplicate project", template: "Edit template", fromTemplate: "New project from the template" }[this.editKind ?? "add"], `Tab next field · ${key("s", "ctrl")} save · ${backKey()} or Esc back`))
       .child(h_flex().pt(10).gap(6)
         .children(SECTIONS.map(([id, name]) => this.button(t, `pp-sec-${id}`, name, this.section === id, () => this.showSection(id)))))
       .child(v_flex().min_h(0).h(430).overflow_y_scrollbar().pr(8).children(sections[this.section]()))

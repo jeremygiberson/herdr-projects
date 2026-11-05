@@ -63,11 +63,13 @@ openOverlay({
 
 The `repo` hints are matched against your projects. If exactly one project matches, the launch screen opens with the branch and prompt filled in. If none or several match, the picker shows the project list with a banner, "Starting ‹source.id› on ‹branch›: pick a project", and the launch screen opens once you choose one. A `v` the picker doesn't know shows a red message and nothing else.
 
-With `checkout: "existing"` the picker checks out the local branch, or tracks `<remote>/<branch>` if only the remote has it. It never adds a `-N` suffix. If a worktree is already on that branch it is reused, and its open space is selected instead of making a new one.
+The branch is used exactly as given, with or without a slash; editing it in the branch box makes it ordinary text again (a name without a slash then goes through the project's branch template).
+
+With `checkout: "existing"` the picker checks out the local branch, or tracks `<remote>/<branch>` if only the remote has it. It never adds a `-N` suffix. If a worktree is already on that branch (wherever it is) it is reused, and its open space is selected instead of making a new one. A branch that is checked out in the project's main checkout is refused.
 
 `launch.name` is ignored: the project's space-name template decides the space name.
 
-When `backTo` is given, Esc on the launch screen closes the picker and reopens that mod with the given props. Without it, Esc goes back to the project list as usual. Esc reaches the picker through the `mod:projects` section of `keys.json` (see Install), so that section must be merged for `backTo` to work.
+When `backTo` is given, Esc on the launch screen or on the project list closes the picker and reopens that mod with the given props; alt+b (⌘⌥B) on the launch screen goes to the project list instead, to pick another project. Without `backTo`, Esc on the launch screen goes back to the project list. Back on the list the banner shows again and picking a project prefills the launch screen, until a launch succeeds. Esc reaches the picker through the `mod:projects` section of `keys.json` (see Install), so that section must be merged for `backTo` to work.
 
 ## Projects file
 

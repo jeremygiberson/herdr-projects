@@ -7,7 +7,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync, rmSync, realpathSyn
 import { join } from "node:path";
 import { makeRepo, scratch, sh } from "./helpers/repo.mjs";
 
-const { state, reset, calls, resetCalls, setShared, pushCommand, getCommandWaits } = await import("./helpers/herdr-stub.mjs");
+const { state, reset, calls, resetCalls, shared, setShared, pushCommand, getCommandWaits } = await import("./helpers/herdr-stub.mjs");
 const { textOf, findAll } = await import("./helpers/gpui-stub.mjs");
 const { default: Picker } = await import("../mods/projects/main.js");
 const { normalize, firstAgent } = await import("../mods/projects/lib.js");
@@ -629,14 +629,15 @@ test("alt+b steps back one screen at a time, and does nothing on the list (herdr
   assert.equal(state.closed, 0);
 });
 
-test("the screens say how to go back, and that Esc closes", async () => {
+test("the screens say how to go back: alt+b or Esc", async () => {
   const { v, cx } = await open([proj("demo", "/r/demo")]);
   press(v, cx, "x", { alt: true });
-  assert.ok(texts(v).includes("alt+b back · Esc closes"));
-  assert.ok(!texts(v).includes("Esc back"));
+  assert.ok(texts(v).includes("alt+b or Esc back"));
+  assert.ok(!texts(v).includes("Esc closes"));
   press(v, cx, "b", { alt: true });
   press(v, cx, "e", { alt: true });
-  assert.ok(texts(v).includes("alt+b back · Esc closes"));
+  assert.ok(texts(v).includes("alt+b or Esc back"));
+  assert.ok(!texts(v).includes("Esc closes"));
 });
 
 test("on a Mac the way back is cmd+alt+B (herdr owns cmd+B), and the screens say so", async () => {
@@ -645,13 +646,13 @@ test("on a Mac the way back is cmd+alt+B (herdr owns cmd+B), and the screens say
   rendered(v);
   press(v, cx, "x", { platform: true });
   assert.equal(v.mode, "backup");
-  assert.ok(texts(v).includes("⌘⌥B back · Esc closes"));
+  assert.ok(texts(v).includes("⌘⌥B or Esc back"));
   assert.ok(!texts(v).includes("⌘B back"));
   press(v, cx, "b", { platform: true, alt: true });
   assert.equal(v.mode, "list");
   press(v, cx, "e", { platform: true });
   assert.equal(v.mode, "edit");
-  assert.ok(texts(v).includes("⌘⌥B back"));
+  assert.ok(texts(v).includes("⌘⌥B or Esc back"));
   press(v, cx, "b", { platform: true, alt: true });
   assert.equal(v.mode, "list");
   assert.equal(state.closed, 0);
@@ -1934,6 +1935,7 @@ test("a reused worktree with an open space selects it", async () => {
   again.v.launchNow(); await again.cx.settle();
   assert.deepEqual(again.v.error, null);
   assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["space.select", "s9"]]);
+  assert.equal(typeof shared("projects.recent")?.[p.path], "number", "the reuse select is recorded as recent");
 });
 
 test("a hand-made worktree with an open space is selected before any setup copies into it", async () => {
@@ -1992,4 +1994,98 @@ test("an error while handling the escape command is shown and the loop keeps goi
   v.keys = keys; v.error = null;
   pushCommand("escape"); await cx.settle();
   assert.equal(state.closed, 1);
+});
+
+// ---------------------------------------------------------------- a launch request stays until it launches
+
+const SC = { v: 1, branch: "me/sc-1/x", prompt: "Read sc-1", repo: { names: ["api"] } };
+const BACK = { mod: "shortcut", props: { screen: "story", id: 1 } };
+
+test("launch props: alt+b from the prefilled screen shows the banner, and picking another project prefills", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo()), proj("Web", makeRepo())], null, { detail: false }, { launch: SC, backTo: BACK });
+  assert.equal(v.mode, "launch"); assert.equal(v.target.name, "Api");
+  press(v, cx, "b", { alt: true });
+  assert.equal(v.mode, "list"); assert.equal(state.closed, 0); assert.deepEqual(state.overlays, []);
+  assert.match(texts(v), /Starting me\/sc-1\/x: pick a project/);
+  v.at = 1; enter(v);
+  assert.equal(v.mode, "launch"); assert.equal(v.target.name, "Web");
+  assert.equal(v.nameInput.value(), "me/sc-1/x"); assert.equal(v.promptBox.value(), "Read sc-1");
+});
+test("launch props: Esc without backTo returns to the list with the banner", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: SC });
+  pushCommand("escape"); await cx.settle();
+  assert.equal(v.mode, "list"); assert.equal(state.closed, 0);
+  assert.match(texts(v), /Starting me\/sc-1\/x: pick a project/);
+  enter(v);
+  assert.equal(v.mode, "launch"); assert.equal(v.nameInput.value(), "me/sc-1/x");
+});
+test("launch props: a failed launch, then Esc, shows the banner again", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "x", checkout: "existing", repo: { names: ["api"] } } });
+  v.launchNow(); await cx.settle();
+  assert.equal(v.mode, "busy"); assert.match(v.error, /branch "x" not found locally or on origin/);
+  pushCommand("escape"); await cx.settle();
+  assert.equal(v.mode, "list"); assert.equal(state.closed, 0);
+  assert.match(texts(v), /Starting x: pick a project/);
+  enter(v);
+  assert.equal(v.mode, "launch"); assert.equal(v.launch.existing, true); assert.equal(v.nameInput.value(), "x");
+});
+test("launch props: an error on the launch screen lands on the list with the banner", async () => {
+  const { v } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: SC });
+  v.fail("launch", new Error("boom"));
+  assert.equal(v.mode, "list");
+  assert.match(texts(v), /Starting me\/sc-1\/x: pick a project/);
+});
+test("launch props: a launch that succeeds forgets the request", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: SC });
+  v.launchNow(); await cx.settle();
+  assert.equal(v.error, null); assert.equal(state.closed, 1);
+  assert.equal(v.request, null); assert.equal(v.pending, null);
+});
+test("launch props: Esc on the banner list with backTo reopens the other mod", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo()), proj("Web", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "me/x" }, backTo: BACK });
+  assert.equal(v.mode, "list");
+  pushCommand("escape"); await cx.settle();
+  assert.equal(state.closed, 1);
+  assert.deepEqual(state.overlays, [{ mod: "shortcut", kind: "dialog", width: 0.8, height: 0.8, props: { screen: "story", id: 1 } }]);
+});
+test("launch props: the launch screen says Esc returns when backTo is set", async () => {
+  const { v } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: SC, backTo: BACK });
+  assert.ok(texts(v).includes("alt+b back · Esc returns"));
+  const { v: v2 } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: SC });
+  assert.ok(texts(v2).includes("alt+b or Esc back"));
+});
+test("launch props: a backTo without a mod name is ignored", async () => {
+  for (const backTo of [{}, { mod: "" }, { mod: 3 }, "shortcut"]) {
+    const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { backTo });
+    assert.equal(v.backTo, null);
+    pushCommand("escape"); await cx.settle();
+    assert.equal(state.closed, 1); assert.deepEqual(state.overlays, []);
+  }
+});
+
+test("launch props: a slash-free branch is used verbatim in new mode", async () => {
+  const dir = makeRepo();
+  const root = scratch("pp-wt");
+  const p = proj("Api", dir, { worktree: { root: `${root}/{branch}`, branchTemplate: "{user}/{slug}" } });
+  const { v, cx } = await open([p], null, { detail: false }, { launch: { v: 1, branch: "sc-1234-fix", repo: { names: ["api"] } } });
+  await cx.settle();
+  assert.equal(v.preview, "sc-1234-fix");
+  v.launchNow(); await cx.settle();
+  assert.equal(v.error, null);
+  assert.ok(existsSync(`${root}/sc-1234-fix`));
+  assert.equal(sh(dir, "rev-parse", "--verify", "refs/heads/sc-1234-fix").length > 0, true);
+});
+test("launch props: editing the prefilled branch brings the template back", async () => {
+  const p = proj("Api", makeRepo(), { worktree: { branchTemplate: "{user}/{slug}" } });
+  const { v, cx } = await open([p], null, { detail: false }, { launch: { v: 1, branch: "sc-1234-fix", repo: { names: ["api"] } } });
+  v.nameInput.set_value("sc-1234-fixed"); v.refreshPreview(cx); await cx.settle();
+  assert.equal(v.launch.verbatim, false);
+  assert.match(v.preview, /^test-user\/sc-1234-fixed$/);
+});
+test("launch props: in existing mode the preview is the branch checked out", async () => {
+  const dir = makeRepo(); sh(dir, "branch", "sc-9-fix");
+  const p = proj("Api", dir, { worktree: { branchTemplate: "{user}/{slug}" } });
+  const { v, cx } = await open([p], null, { detail: false }, { launch: { v: 1, branch: "sc-9-fix", checkout: "existing", repo: { names: ["api"] } } });
+  v.nameInput.set_value("sc-9-fix "); v.refreshPreview(cx); await cx.settle(); // an edit: existing mode stays verbatim
+  assert.equal(v.preview, "sc-9-fix");
 });
