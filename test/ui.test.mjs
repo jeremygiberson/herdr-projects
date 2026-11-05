@@ -1975,3 +1975,21 @@ test("escape delivered as a command in list mode closes the popup", async () => 
   pushCommand("escape"); await cx.settle();
   assert.equal(state.closed, 1); assert.deepEqual(state.overlays, []);
 });
+
+test("escape as a command in busy mode closes the popup, alt+b does nothing", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false });
+  v.mode = "busy";
+  press(v, cx, "b", { alt: true });
+  assert.equal(state.closed, 0); assert.equal(v.mode, "busy");
+  pushCommand("escape"); await cx.settle();
+  assert.equal(state.closed, 1);
+});
+test("an error while handling the escape command is shown and the loop keeps going", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false });
+  const keys = v.keys; v.keys = () => { throw new Error("boom"); };
+  pushCommand("escape"); await cx.settle();
+  assert.match(v.error, /^escape: boom/); assert.equal(state.closed, 0);
+  v.keys = keys; v.error = null;
+  pushCommand("escape"); await cx.settle();
+  assert.equal(state.closed, 1);
+});

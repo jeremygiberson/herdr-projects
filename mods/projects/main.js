@@ -1,7 +1,7 @@
 // Projects: a picker of configured git checkouts, each with its own worktree and startup
 // settings. Type to filter, ↑/↓ and Enter to open, Shift+Enter for the main checkout, Add project / Edit / Worktrees / Delete
-// buttons (or alt/ctrl/cmd + n, e, w, d), alt+b (cmd+alt+B on a Mac) to go back a screen. Herdr itself closes a popup on Esc and
-// never passes that key to the mod, so Esc can only close the picker.
+// buttons (or alt/ctrl/cmd + n, e, w, d), alt+b (cmd+alt+B on a Mac) to go back a screen. Esc reaches the mod as the
+// projects.escape command (the mod:projects section of keys.json), not as a key event; it closes the popup or steps back.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
@@ -121,7 +121,9 @@ export default class ProjectPresets extends View {
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
-        if (c === "escape") this.keys({ key: "escape", modifiers: { control: false, alt: false, platform: false, shift: false } }, cx);
+        try {
+          if (c === "escape") this.keys({ key: "escape", modifiers: { control: false, alt: false, platform: false, shift: false } }, cx);
+        } catch (e) { this.fail("escape", e); }
         cx.notify();
       }
     });
@@ -1219,7 +1221,7 @@ export default class ProjectPresets extends View {
     const mod = ctrl || e.modifiers.alt || e.modifiers.platform; // ctrl, alt or cmd
     const layoutMod = e.modifiers.alt && (ctrl || e.modifiers.platform);
     if (this.pendingDelete && k !== "d") this.pendingDelete = null;
-    // herdr never passes Esc to a popup, so this is the way back. (Not a bracket key: herdr binds alt-[ and alt-] to tabs.)
+    // Esc arrives here as the projects.escape command (keys.json), alt+b as a key. (Not a bracket key: herdr binds alt-[ and alt-] to tabs.)
     const back = k === "b" && mod;
     if (k === "escape" || back) {
       if (this.mode === "launch" && this.backTo) {
@@ -1228,7 +1230,7 @@ export default class ProjectPresets extends View {
         return;
       }
       if (this.mode === "list") { if (back) return; this.dismiss(); }
-      else if (this.mode === "busy" && !this.error) return;
+      else if (this.mode === "busy" && !this.error) { if (back) return; this.dismiss(); } // closing the popup cancels the running task
       else { this.mode = "list"; this.error = null; this.search.focus(); }
     } else if (this.mode === "list") {
       const n = this.rows().length;
