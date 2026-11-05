@@ -5,7 +5,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
-import { knownAgents, window, theme, props, closeOverlay, openOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec, notify } from "herdr";
+import { knownAgents, window, theme, props, closeOverlay, openOverlay, nextCommand, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec, notify } from "herdr";
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
 import { inspect, repoKey, branchOf, realPath, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
 import { buildWorkspace } from "./workspace.js";
@@ -116,6 +116,15 @@ export default class ProjectPresets extends View {
       return;
     }
     this.cx = cx;
+    // The "mod:projects" section of keys.json sends Esc here as a command (herdr closes a dialog on Esc and never passes the key as a key event).
+    // It goes through keys() so Esc behaves the same in one place.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const c = await nextCommand();
+        if (c === "escape") this.keys({ key: "escape", modifiers: { control: false, alt: false, platform: false, shift: false } }, cx);
+        cx.notify();
+      }
+    });
     this.scroll = VirtualListScrollHandle.new();
     this.wtScroll = VirtualListScrollHandle.new();
     this.ranges = {};

@@ -43,8 +43,15 @@ export const state = {
   overlays: [],         // every openOverlay(spec)
 };
 
+const cmdQueue = [];
+let cmdWaiter = null;
+export const pushCommand = (c) => { if (cmdWaiter) { const w = cmdWaiter; cmdWaiter = null; w(c); } else cmdQueue.push(c); };
+export let commandWaits = 0; // how many times a mod has asked for a command; a spawn that asks is a command loop and never ends
+export const getCommandWaits = () => commandWaits;
+export const nextCommand = () => (commandWaits++, cmdQueue.length ? Promise.resolve(cmdQueue.shift()) : new Promise((r) => { cmdWaiter = r; }));
 export function reset() {
   Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], machines: undefined, screen: undefined, layoutNames: undefined, closed: 0, platform: "linux", picked: null, props: undefined, overlays: [] });
+  cmdQueue.length = 0; cmdWaiter = null;
   for (const k of Object.keys(store)) delete store[k];
 }
 

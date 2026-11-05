@@ -7,7 +7,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync, rmSync, realpathSyn
 import { join } from "node:path";
 import { makeRepo, scratch, sh } from "./helpers/repo.mjs";
 
-const { state, reset, calls, resetCalls, setShared } = await import("./helpers/herdr-stub.mjs");
+const { state, reset, calls, resetCalls, setShared, pushCommand, getCommandWaits } = await import("./helpers/herdr-stub.mjs");
 const { textOf, findAll } = await import("./helpers/gpui-stub.mjs");
 const { default: Picker } = await import("../mods/projects/main.js");
 const { normalize, firstAgent } = await import("../mods/projects/lib.js");
@@ -33,7 +33,7 @@ async function open(projects, layouts, opts = { detail: true }, props = {}) {
     timers: [],
     timer: { after: (ms, fn) => cx.timers.push({ ms, fn }), every: (ms, fn) => cx.every.push({ ms, fn }) },
     every: [],
-    spawn: (fn) => { const p = fn(cx); pending.push(p); return p; },
+    spawn: (fn) => { const before = getCommandWaits(); const p = fn(cx); if (getCommandWaits() === before) pending.push(p); return p; }, // a command loop never ends: settle would wait on it forever
     focus_handle: () => ({}),
     notify() {},
     stop_propagation() {},
@@ -908,7 +908,7 @@ test("the choice is remembered: a picker opened later starts the same way", asyn
   const { shared } = await import("./helpers/herdr-stub.mjs");
   assert.equal(shared("projects.detail"), false);
   const pending = [];
-  const cx2 = { timer: { after() {}, every() {} }, spawn: (fn) => { const p = fn(cx2); pending.push(p); return p; }, focus_handle: () => ({}), notify() {}, stop_propagation() {} };
+  const cx2 = { timer: { after() {}, every() {} }, spawn: (fn) => { const before = getCommandWaits(); const p = fn(cx2); if (getCommandWaits() === before) pending.push(p); return p; }, focus_handle: () => ({}), notify() {}, stop_propagation() {} };
   const again = new Picker();
   again.init({}, cx2);
   await Promise.all(pending);
@@ -1614,7 +1614,7 @@ function openLauncher(slot = "sidebar", before = () => {}) {
   state.props = { slot };
   before();
   const pending = [];
-  const cx = { timers: [], every: [], timer: { after: (ms, fn) => cx.timers.push({ ms, fn }), every: (ms, fn) => cx.every.push({ ms, fn }) }, spawn: (fn) => { const p = fn(cx); pending.push(p); return p; }, focus_handle: () => ({}), notify() {}, stop_propagation() {} };
+  const cx = { timers: [], every: [], timer: { after: (ms, fn) => cx.timers.push({ ms, fn }), every: (ms, fn) => cx.every.push({ ms, fn }) }, spawn: (fn) => { const before = getCommandWaits(); const p = fn(cx); if (getCommandWaits() === before) pending.push(p); return p; }, focus_handle: () => ({}), notify() {}, stop_propagation() {} };
   const v = new Picker();
   v.init({}, cx);
   return { v, cx, settle: () => Promise.all(pending) };
@@ -1962,4 +1962,16 @@ test("Esc without backTo goes back to the list as before", async () => {
   const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "b", repo: { names: ["api"] } } });
   press(v, cx, "escape");
   assert.equal(v.mode, "list"); assert.equal(state.closed, 0);
+});
+
+test("escape delivered as a command with backTo reopens the other mod", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "b", repo: { names: ["api"] } }, backTo: { mod: "shortcut", props: { screen: "story", id: 1 } } });
+  pushCommand("escape"); await cx.settle();
+  assert.equal(state.closed, 1);
+  assert.deepEqual(state.overlays, [{ mod: "shortcut", kind: "dialog", width: 0.8, height: 0.8, props: { screen: "story", id: 1 } }]);
+});
+test("escape delivered as a command in list mode closes the popup", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false });
+  pushCommand("escape"); await cx.settle();
+  assert.equal(state.closed, 1); assert.deepEqual(state.overlays, []);
 });

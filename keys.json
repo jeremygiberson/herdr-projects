@@ -2,5 +2,8 @@
   "global": {
     "ctrl-alt-p": "mod.open:projects",
     "cmd-alt-p": "mod.open:projects"
+  },
+  "mod:projects": {
+    "escape": "projects.escape"
   }
 }

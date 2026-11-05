@@ -10,7 +10,7 @@ Started from [project-presets](https://github.com/cgill27/project-presets) by cg
 ln -s "$PWD/mods/projects" ~/.config/herdr-app/mods/projects
 ```
 
-Then merge `keys.json` into `~/.config/herdr-app/keys.json`.
+Then merge `keys.json` into `~/.config/herdr-app/keys.json`. Its `mod:projects` section sends Esc to the picker as a command; without it herdr closes the dialog on Esc and the picker never sees the key.
 
 ## The clickable Projects button
 
@@ -67,7 +67,7 @@ With `checkout: "existing"` the picker checks out the local branch, or tracks `<
 
 `launch.name` is ignored: the project's space-name template decides the space name.
 
-When `backTo` is given, Esc on the launch screen closes the picker and reopens that mod with the given props. Without it, Esc goes back to the project list as usual.
+When `backTo` is given, Esc on the launch screen closes the picker and reopens that mod with the given props. Without it, Esc goes back to the project list as usual. Esc reaches the picker through the `mod:projects` section of `keys.json` (see Install), so that section must be merged for `backTo` to work.
 
 ## Projects file
 
