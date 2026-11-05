@@ -1951,3 +1951,15 @@ test("a hand-made worktree with an open space is selected before any setup copie
   assert.equal(existsSync(`${wt}/.env.local`), false);
   assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["space.select", "s9"]]);
 });
+
+test("Esc with backTo reopens the other mod", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "b", repo: { names: ["api"] } }, backTo: { mod: "shortcut", props: { screen: "story", id: 1 } } });
+  press(v, cx, "escape");
+  assert.equal(state.closed, 1);
+  assert.deepEqual(state.overlays, [{ mod: "shortcut", kind: "dialog", width: 0.8, height: 0.8, props: { screen: "story", id: 1 } }]);
+});
+test("Esc without backTo goes back to the list as before", async () => {
+  const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "b", repo: { names: ["api"] } } });
+  press(v, cx, "escape");
+  assert.equal(v.mode, "list"); assert.equal(state.closed, 0);
+});

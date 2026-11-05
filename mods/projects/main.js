@@ -5,7 +5,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, VirtualListScrollHandle, v_virtual_list } from "gpui-base";
-import { knownAgents, window, theme, props, closeOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec, notify } from "herdr";
+import { knownAgents, window, theme, props, closeOverlay, openOverlay, run, pickFolder, shared, setShared, home, spaces, readTextFile, writeTextFile, layout, layouts, appHome, exec, notify } from "herdr";
 import { loadConfig, saveConfig, dataFilePath } from "./config.js";
 import { inspect, repoKey, branchOf, realPath, projectFolder, previewBranch, createWorktree, worktreeSpaceName, listWorktrees, removeWorktree, prepareMain, findSpace, gitSummary, folderExists } from "./git.js";
 import { buildWorkspace } from "./workspace.js";
@@ -1213,6 +1213,11 @@ export default class ProjectPresets extends View {
     // herdr never passes Esc to a popup, so this is the way back. (Not a bracket key: herdr binds alt-[ and alt-] to tabs.)
     const back = k === "b" && mod;
     if (k === "escape" || back) {
+      if (this.mode === "launch" && this.backTo) {
+        this.dismiss();
+        openOverlay({ mod: this.backTo.mod, kind: "dialog", width: 0.8, height: 0.8, props: this.backTo.props ?? {} });
+        return;
+      }
       if (this.mode === "list") { if (back) return; this.dismiss(); }
       else if (this.mode === "busy" && !this.error) return;
       else { this.mode = "list"; this.error = null; this.search.focus(); }

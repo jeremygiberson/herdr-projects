@@ -39,6 +39,36 @@ Repos that are not projects can be covered by an `autoLayouts` list at the top l
 
 `repo` is a repo name or `*`, `branch` is optional, `layout` is a layout by name: a panes layout (one tab) or a tabs layout. The best match wins: repo and branch, then repo, then `*` with branch, then `*`. These layouts get tabs and panes only, no copy or setup. A repo that is a project is never covered by this list, even with the project's auto-layout off.
 
+## Launch from another mod
+
+Another mod can open the picker straight onto the launch screen for a branch, for example to start work on a ticket. It opens the projects mod as an overlay and passes a `launch` prop:
+
+```js
+openOverlay({
+  mod: "projects", kind: "dialog", width: 0.8, height: 0.8,
+  props: {
+    launch: {
+      v: 1,
+      branch: "jeremy/sc-1234/fix-the-thing",   // required
+      checkout: "new",                          // "new" (default) or "existing"
+      name: "sc-1234 · Fix the thing",          // ignored: the project's space-name template wins
+      prompt: "Read the shortcut story …",      // optional: fills the first-prompt box
+      source: { kind: "shortcut", id: "sc-1234", url: "https://app.shortcut.com/…", title: "Fix the thing" },
+      repo:   { names: ["vizion-api"], urls: ["https://github.com/org/vizion-api"], folder: null } // hints
+    },
+    backTo: { mod: "shortcut", props: { screen: "story", id: 1234 } }  // optional: Esc reopens this mod
+  }
+})
+```
+
+The `repo` hints are matched against your projects. If exactly one project matches, the launch screen opens with the branch and prompt filled in. If none or several match, the picker shows the project list with a banner, "Starting ‹source.id› on ‹branch›: pick a project", and the launch screen opens once you choose one. A `v` the picker doesn't know shows a red message and nothing else.
+
+With `checkout: "existing"` the picker checks out the local branch, or tracks `<remote>/<branch>` if only the remote has it. It never adds a `-N` suffix. If a worktree is already on that branch it is reused, and its open space is selected instead of making a new one.
+
+`launch.name` is ignored: the project's space-name template decides the space name.
+
+When `backTo` is given, Esc on the launch screen closes the picker and reopens that mod with the given props. Without it, Esc goes back to the project list as usual.
+
 ## Projects file
 
 Projects live in `~/.config/herdr-app/data/projects.json`; the editor writes it, and you can edit it by hand. A project's `agent` is what its agent panes run: a command, arguments, environment lines (`KEY=value`, set for the agent only), a default prompt (it prefills the launch screen) and how the prompt is delivered. Its `startup.tabs` is the list of tabs its space opens with. A tab has a `folder` (relative to the project or worktree, or absolute) and either a `command` or `panes`; a pane is an `agent`, a `shell` or a `command`, split `right` or `down` from the previous one, and its `folder` is relative to its tab's folder. An agent pane that names no `agent` of its own runs the project's agent; when the project names none either, the first installed agent. So picking "Agent + terminal right" on a project with only a terminal tab still starts an agent. Folders are checked before anything is created.
