@@ -595,13 +595,10 @@ export default class ProjectPresets extends View {
           this.dismiss();
           return run("space.select", { id: existing.id });
         }
-        const { folder, name, chain, steps, env, marker, reused } = await this.prepareLaunch(p, { worktree, branchText, existing: checkout }, log);
-        if (reused) {
-          const open = spaces().find((s) => !s.machine && s.folder === folder);
-          if (open) {
-            this.dismiss();
-            return run("space.select", { id: open.id });
-          }
+        const { folder, name, chain, steps, env, marker, open } = await this.prepareLaunch(p, { worktree, branchText, existing: checkout }, log);
+        if (open) {
+          this.dismiss();
+          return run("space.select", { id: open.id });
         }
         const quick = p.startup.quickSetup;
         if (quick && await runInline(steps, folder, env, log) && marker) {
@@ -637,8 +634,11 @@ export default class ProjectPresets extends View {
       return { folder: main, name: p.name, ...setup };
     }
     const wt = await createWorktree(p, branchText, log, { existing });
+    // A reused worktree that already has a space is only selected: no setup touches it first.
+    const open = wt.reused ? spaces().find((s) => !s.machine && s.folder === wt.folder) : undefined;
+    if (open) return { open };
     const setup = await prepareSetup({ project: p, folder: wt.folder, isWorktree: true, branch: wt.branch, repo: wt.vars.repo, home: home(), log });
-    return { folder: wt.folder, name: worktreeSpaceName(p, wt), reused: wt.reused, ...setup };
+    return { folder: wt.folder, name: worktreeSpaceName(p, wt), ...setup };
   }
 
   // ---- editor -----------------------------------------------------------

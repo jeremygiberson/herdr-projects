@@ -1935,3 +1935,19 @@ test("a reused worktree with an open space selects it", async () => {
   assert.deepEqual(again.v.error, null);
   assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["space.select", "s9"]]);
 });
+
+test("a hand-made worktree with an open space is selected before any setup copies into it", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "feat/y");
+  writeFileSync(`${dir}/.env.local`, "SECRET=1\n");
+  const root = scratch("pp-wt");
+  const wt = `${realpathSync(root)}/feat/y`;
+  sh(dir, "worktree", "add", wt, "feat/y");
+  const p = proj("Api", dir, { worktree: { root: `${root}/{branch}`, copy: [".env.local"] } });
+  const launch = { v: 1, branch: "feat/y", checkout: "existing", repo: { names: ["Api"] } };
+  const { v, cx } = await open([p], null, { detail: false }, { launch });
+  state.spaces.push({ id: "s9", folder: wt, machine: null, tabs: [] });
+  v.launchNow(); await cx.settle();
+  assert.equal(v.error, null);
+  assert.equal(existsSync(`${wt}/.env.local`), false);
+  assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["space.select", "s9"]]);
+});
