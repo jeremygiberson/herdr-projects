@@ -689,3 +689,52 @@ export function migrateLauncherBlocks(tree) {
   walk(copy);
   return { tree: copy, changed };
 }
+
+/** Validate a launch-by-props request: { ok: true, launch } with defaults and hints normalized, or { ok: false, error }. */
+export function parseLaunch(raw) {
+  const o = raw && typeof raw === "object" ? raw : {};
+  const v = o.v ?? 1;
+  if (v !== 1) return { ok: false, error: `Unknown launch request version ${v}` };
+  const branch = typeof o.branch === "string" ? o.branch.trim() : "";
+  if (!branch) return { ok: false, error: "Launch request has no branch" };
+  const checkout = o.checkout ?? "new";
+  if (checkout !== "new" && checkout !== "existing") return { ok: false, error: `Unknown checkout "${checkout}"` };
+  const str = (x) => (typeof x === "string" ? x : null);
+  const strs = (x) => (Array.isArray(x) ? x.filter((s) => typeof s === "string") : []);
+  const s = o.source && typeof o.source === "object" ? o.source : null;
+  const r = o.repo && typeof o.repo === "object" ? o.repo : {};
+  return {
+    ok: true,
+    launch: {
+      v: 1, branch, checkout, prompt: str(o.prompt),
+      source: s ? { kind: str(s.kind), id: str(s.id), url: str(s.url), title: str(s.title) } : null,
+      repo: { names: strs(r.names), urls: strs(r.urls), folder: str(r.folder) },
+    },
+  };
+}
+
+/** The project a launch request points at: { project } for exactly one match, else { candidates } (folder first, then names and urls). */
+export function resolveLaunchProject(projects, launch, home) {
+  const list = projects ?? [];
+  const folder = launch.repo.folder;
+  if (folder) {
+    const hits = list.filter((p) => {
+      const path = expandHome(p.path, home);
+      if (folder === path) return true;
+      const root = String(p.worktree?.root ?? "").replace(/\{repo\}/g, basename(p.path));
+      const cut = root.indexOf("{");
+      const prefix = expandHome(cut < 0 ? root : root.slice(0, cut), home);
+      return prefix !== "" && folder.startsWith(prefix);
+    });
+    if (hits.length === 1) return { project: hits[0] };
+  }
+  const wanted = new Set([
+    ...launch.repo.names.map((n) => n.toLowerCase()),
+    ...launch.repo.urls.map((u) => basename(u.replace(/\.git$/i, "")).toLowerCase()),
+  ]);
+  const hits = list.filter((p) => wanted.has(String(p.name).toLowerCase()) || wanted.has(basename(p.path).toLowerCase()));
+  return hits.length === 1 ? { project: hits[0] } : { candidates: hits };
+}
+
+/** The picker's banner line for a launch request. */
+export const launchBanner = (launch) => `Starting ${launch.source ? (launch.source.id ?? launch.branch) + " on " : ""}${launch.branch}: pick a project`;

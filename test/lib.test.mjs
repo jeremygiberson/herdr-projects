@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, matchAutoLayout, repoNameFromKey, tabsForAuto, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix, setupScript, inUserShell, fallbackAgent, badEnvLines } from "../mods/projects/lib.js";
+import { fuzzy, slug, expand, branchName, expandHome, splitList, normalize, splitArgs, basename, parseWorktrees, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, SPACE_MARK, defaultTemplate, uniqueName, duplicateProject, startFromTemplate, portablePath, exportData, parseBackup, mergeProjects, mergeLayouts, BACKUP_FORMAT, exportFileName, allLayouts, layoutPlan, nextLayout, inFolder, BUILTIN_LAYOUTS, dateStamp, timeStamp, shortHome, joinList, blankProject, tabPlan, tabsForLaunch, matchAutoLayout, repoNameFromKey, tabsForAuto, firstAgent, blankPane, tabLabels, expandPath, resolveFolder, spaceShows, shq, setupVars, setupChain, chainThenAgent, chainAlone, setupSummary, expandSetup, exportsPrefix, setupScript, inUserShell, fallbackAgent, badEnvLines, parseLaunch, resolveLaunchProject, launchBanner } from "../mods/projects/lib.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -749,4 +749,42 @@ test("tabsForAuto: a project gives its own tabs; a panes layout becomes one tab;
 test("repoNameFromKey is the folder holding the common .git, else the space's folder name", () => {
   assert.equal(repoNameFromKey("/src/api/.git", "/wt/api/feat"), "api");
   assert.equal(repoNameFromKey("/src/api.git", "/wt/feat"), "feat");
+});
+
+test("parseLaunch fills defaults and keeps hints", () => {
+  const r = parseLaunch({ v: 1, branch: "me/sc-1/x", prompt: "hi", source: { kind: "shortcut", id: "sc-1" }, repo: { names: ["api"] } });
+  assert.deepEqual(r, { ok: true, launch: { v: 1, branch: "me/sc-1/x", checkout: "new", prompt: "hi", source: { kind: "shortcut", id: "sc-1", url: null, title: null }, repo: { names: ["api"], urls: [], folder: null } } });
+});
+test("parseLaunch rejects a missing branch", () => {
+  assert.deepEqual(parseLaunch({ v: 1 }), { ok: false, error: "Launch request has no branch" });
+  assert.deepEqual(parseLaunch({ v: 1, branch: "  " }), { ok: false, error: "Launch request has no branch" });
+  assert.deepEqual(parseLaunch(null), { ok: false, error: "Launch request has no branch" });
+});
+test("parseLaunch refuses an unknown version and a bad checkout", () => {
+  assert.deepEqual(parseLaunch({ v: 2, branch: "b" }), { ok: false, error: "Unknown launch request version 2" });
+  assert.deepEqual(parseLaunch({ v: 1, branch: "b", checkout: "sideways" }), { ok: false, error: 'Unknown checkout "sideways"' });
+});
+test("resolveLaunchProject: folder inside the worktree root, then names and url basenames, case-insensitively", () => {
+  const home = "/h";
+  const api = normalize({ name: "API", path: "/h/src/vizion-api", worktree: { root: "/h/wt/{repo}/{branch}" } });
+  const web = normalize({ name: "Web", path: "/h/src/web" });
+  const L = (repo) => parseLaunch({ v: 1, branch: "b", repo }).launch;
+  assert.deepEqual(resolveLaunchProject([api, web], L({ folder: "/h/wt/vizion-api/b" }), home), { project: api });
+  assert.deepEqual(resolveLaunchProject([api, web], L({ names: ["api"] }), home), { project: api });
+  assert.deepEqual(resolveLaunchProject([api, web], L({ urls: ["https://github.com/org/VIZION-API"] }), home), { project: api });
+  assert.deepEqual(resolveLaunchProject([api, web], L({ urls: ["git@github.com:org/vizion-api.git"] }), home), { project: api });
+  assert.deepEqual(resolveLaunchProject([api, web], L({}), home), { candidates: [] });
+});
+test("resolveLaunchProject: the default worktree root only matches its own repo's folder", () => {
+  const a = normalize({ name: "a", path: "/h/src/a" }), b = normalize({ name: "b", path: "/h/src/b" });
+  const l = parseLaunch({ v: 1, branch: "x", repo: { folder: "/h/.herdr/worktrees/b/x" } }).launch;
+  assert.deepEqual(resolveLaunchProject([a, b], l, "/h"), { project: b });
+});
+test("resolveLaunchProject: two matches are candidates", () => {
+  const a = normalize({ name: "api", path: "/h/a/api", group: "x" }), b = normalize({ name: "api", path: "/h/b/api", group: "y" });
+  assert.deepEqual(resolveLaunchProject([a, b], parseLaunch({ v: 1, branch: "b", repo: { names: ["api"] } }).launch, "/h"), { candidates: [a, b] });
+});
+test("launchBanner names the source when there is one", () => {
+  assert.equal(launchBanner(parseLaunch({ v: 1, branch: "me/x", source: { kind: "shortcut", id: "sc-9" } }).launch), "Starting sc-9 on me/x: pick a project");
+  assert.equal(launchBanner(parseLaunch({ v: 1, branch: "me/x" }).launch), "Starting me/x: pick a project");
 });
