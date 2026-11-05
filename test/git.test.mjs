@@ -154,6 +154,28 @@ test("existing: a worktree already on that branch is reused", async () => {
   const again = await G.createWorktree(p, "feat/two", note, { existing: true });
   assert.deepEqual([again.folder, again.reused], [first.folder, true]);
 });
+test("existing: a worktree on that branch somewhere else (another root) is reused, not refused", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "feat/elsewhere");
+  const other = `${scratch("pp-other")}/hand-made`;
+  sh(dir, "worktree", "add", other, "feat/elsewhere");
+  const wt = await G.createWorktree(project(dir), "feat/elsewhere", note, { existing: true });
+  assert.deepEqual([wt.folder, wt.branch, wt.reused], [other, "feat/elsewhere", true]);
+  assert.equal(wt.vars.repo, dir.split("/").pop());
+});
+test("existing: the branch of the main checkout fails with a clear message", async () => {
+  const dir = realpathSync(makeRepo());
+  await assert.rejects(G.createWorktree(project(dir), "main", note, { existing: true }), /branch "main" is checked out in the main checkout/);
+});
+test("verbatim: a slash-free name is the branch itself, in the preview and when created", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = project(dir);
+  assert.equal(await G.previewBranch(p, "sc-1234-fix"), "test-user/sc-1234-fix");
+  assert.equal(await G.previewBranch(p, "sc-1234-fix", { verbatim: true }), "sc-1234-fix");
+  const wt = await G.createWorktree(p, "sc-1234-fix", note, { verbatim: true });
+  assert.equal(wt.branch, "sc-1234-fix");
+  assert.equal(sh(wt.folder, "rev-parse", "--abbrev-ref", "HEAD"), "sc-1234-fix");
+  assert.equal((await G.createWorktree(p, "sc-1234-fix", note, { verbatim: true })).branch, "sc-1234-fix-2", "verbatim still suffixes a taken name");
+});
 test("existing: a taken path on another branch fails rather than suffixing", async () => {
   const dir = realpathSync(makeRepo()); sh(dir, "branch", "a"); sh(dir, "branch", "b");
   const p = project(dir, { worktree: { root: `${scratch("pp-wt")}/same` } });

@@ -58,10 +58,15 @@ export async function templateVars(project, slugText) {
   };
 }
 
+/** The branch name the text asks for: the text itself when it has a slash or `verbatim` is set (a launch request's
+ *  branch, an existing branch), otherwise the project's template filled in with the text as {slug}. */
+const wantedBranch = (project, slugText, vars, verbatim) =>
+  (verbatim && slugText.trim()) || slugText.includes("/") ? slugText.trim() : branchName(project.worktree.branchTemplate, vars);
+
 /** What the branch will be called, before collisions are resolved. */
-export async function previewBranch(project, slugText) {
+export async function previewBranch(project, slugText, { verbatim = false } = {}) {
   const vars = await templateVars(project, slugText);
-  return slugText.includes("/") ? slugText.trim() : branchName(project.worktree.branchTemplate, vars);
+  return wantedBranch(project, slugText, vars, verbatim);
 }
 
 /** git fetch, tolerating failure (offline): the local ref is used instead. */
@@ -89,9 +94,10 @@ const exists = async (path) => (await exec("test", ["-e", path])).code === 0;
 export const folderExists = async (path) => { try { return (await exec("test", ["-d", path])).code === 0; } catch { return false; } };
 
 /** Creates the worktree. Returns { folder, branch, vars, reused }. Appends -2, -3… when the branch or path is taken.
- *  With { existing: true } the text is an existing branch (local, else on the remote): no suffixing, and a path
- *  that already is that branch's worktree is reused. */
-export async function createWorktree(project, slugText, log, { existing = false } = {}) {
+ *  With { verbatim: true } the text is the branch name even without a slash (see wantedBranch).
+ *  With { existing: true } the text is an existing branch (local, else on the remote): no suffixing, and a worktree
+ *  already on that branch is reused. */
+export async function createWorktree(project, slugText, log, { existing = false, verbatim = false } = {}) {
   if (existing) return checkoutExisting(project, slugText, log);
   const folder = projectFolder(project);
   const { worktree: w, git: g } = project;
@@ -99,8 +105,8 @@ export async function createWorktree(project, slugText, log, { existing = false 
   await fetchRemote(folder, g, log);
   const base = await baseRef(folder, g);
   const vars = await templateVars(project, slugText);
-  // Text with a slash is the branch name itself; otherwise it feeds the template.
-  const wanted = slugText.includes("/") ? slugText.trim() : branchName(w.branchTemplate, vars);
+  // Text with a slash (or verbatim) is the branch name itself; otherwise it feeds the template.
+  const wanted = wantedBranch(project, slugText, vars, verbatim);
   if (!wanted) throw new Error("The branch name template produced an empty name");
   if ((await git(folder, ["check-ref-format", "--branch", wanted])).code !== 0) throw new Error(`"${wanted}" is not a valid branch name`);
   const isTaken = async (branch, path) => (await git(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0 || (await exists(path));
@@ -128,11 +134,20 @@ async function checkoutExisting(project, slugText, log) {
   if (!branch || (await git(folder, ["check-ref-format", "--branch", branch])).code !== 0) throw new Error(`"${branch}" is not a valid branch name`);
   const vars = await templateVars(project, slugText);
   const path = expandHome(expand(w.root, { ...vars, branch }), home());
+  const wl = await git(folder, ["worktree", "list", "--porcelain"]);
+  const list = wl.code === 0 ? parseWorktrees(wl.stdout) : [];
+  // git refuses a branch that another worktree has checked out: that worktree is reused, wherever it is.
+  const onBranch = list.findIndex((x) => x.branch === branch && !x.prunable);
+  if (onBranch === 0) throw new Error(`branch "${branch}" is checked out in the main checkout`);
   if (await exists(path)) {
-    const r = await git(folder, ["worktree", "list", "--porcelain"]);
-    const held = r.code === 0 ? parseWorktrees(r.stdout).find((x) => x.path === path) : undefined;
+    const held = list.find((x) => x.path === path);
     if (held?.branch === branch) return { folder: path, branch, vars, reused: true };
-    throw new Error(`${path} already holds a worktree on ${held ? held.branch ?? "a detached HEAD" : "an unknown checkout"}`);
+    if (onBranch < 0) throw new Error(`${path} already holds a worktree on ${held ? held.branch ?? "a detached HEAD" : "an unknown checkout"}`);
+  }
+  if (onBranch > 0) {
+    const at = list[onBranch].path;
+    // git reports real paths: keep the template's spelling when it is the same folder.
+    return { folder: (await exists(path)) && (await realPath(path)) === at ? path : at, branch, vars, reused: true };
   }
   let args;
   if ((await git(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) {
