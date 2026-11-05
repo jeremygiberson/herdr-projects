@@ -132,6 +132,41 @@ test("createWorktree rejects an empty or invalid branch name", async () => {
   await assert.rejects(G.createWorktree(project(dir, { worktree: { branchTemplate: "a..b" } }), "x", note), /not a valid branch name/);
 });
 
+test("existing: a local branch is checked out, no suffixing", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "feat/one");
+  const p = project(dir);
+  const wt = await G.createWorktree(p, "feat/one", note, { existing: true });
+  assert.equal(wt.branch, "feat/one"); assert.equal(wt.reused, false);
+  assert.equal(sh(wt.folder, "rev-parse", "--abbrev-ref", "HEAD"), "feat/one");
+});
+test("existing: remote-only branch is tracked", async () => {
+  const { dir: clone, bare } = makeClone(); sh(bare, "branch", "feat/remote", "main");
+  const dir = realpathSync(clone);
+  const wt = await G.createWorktree(project(dir, { git: { fetch: true, remote: "origin" } }), "feat/remote", note, { existing: true });
+  assert.equal(sh(wt.folder, "rev-parse", "--abbrev-ref", "feat/remote@{upstream}"), "origin/feat/remote");
+  const off = project(realpathSync(makeClone().dir), { git: { fetch: false } });
+  await assert.rejects(G.createWorktree(off, "feat/none", note, { existing: true }), /branch "feat\/none" not found locally or on origin/);
+});
+test("existing: a worktree already on that branch is reused", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "feat/two");
+  const p = project(dir);
+  const first = await G.createWorktree(p, "feat/two", note, { existing: true });
+  const again = await G.createWorktree(p, "feat/two", note, { existing: true });
+  assert.deepEqual([again.folder, again.reused], [first.folder, true]);
+});
+test("existing: a taken path on another branch fails rather than suffixing", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "a"); sh(dir, "branch", "b");
+  const p = project(dir, { worktree: { root: `${scratch("pp-wt")}/same` } });
+  await G.createWorktree(p, "a", note, { existing: true });
+  await assert.rejects(G.createWorktree(p, "b", note, { existing: true }), /already holds a worktree on a/);
+});
+test("existing: a taken path that is not a worktree fails", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "c");
+  const root = `${scratch("pp-wt")}/plain`;
+  mkdirSync(root, { recursive: true });
+  await assert.rejects(G.createWorktree(project(dir, { worktree: { root } }), "c", note, { existing: true }), /already holds a worktree on an unknown checkout/);
+});
+
 test("createWorktree fails clearly without a base branch or outside a repo", async () => {
   await assert.rejects(G.createWorktree(project(makeRepo(), { git: { base: "nope" } }), "x", note), /No base branch/);
   await assert.rejects(G.createWorktree(project(scratch()), "x", note), /not a git checkout/);

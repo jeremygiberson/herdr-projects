@@ -88,8 +88,11 @@ const exists = async (path) => (await exec("test", ["-e", path])).code === 0;
 /** Whether a folder exists on this machine (the picker uses it to flag imported projects whose folder is missing). */
 export const folderExists = async (path) => { try { return (await exec("test", ["-d", path])).code === 0; } catch { return false; } };
 
-/** Creates the worktree. Returns { folder, branch }. Appends -2, -3… when the branch or path is taken. */
-export async function createWorktree(project, slugText, log) {
+/** Creates the worktree. Returns { folder, branch, vars, reused }. Appends -2, -3… when the branch or path is taken.
+ *  With { existing: true } the text is an existing branch (local, else on the remote): no suffixing, and a path
+ *  that already is that branch's worktree is reused. */
+export async function createWorktree(project, slugText, log, { existing = false } = {}) {
+  if (existing) return checkoutExisting(project, slugText, log);
   const folder = projectFolder(project);
   const { worktree: w, git: g } = project;
   await inspect(folder);
@@ -109,11 +112,39 @@ export async function createWorktree(project, slugText, log) {
     if (await isTaken(branch, path)) continue;
     log(`git worktree add ${branch} from ${base}…`);
     const r = await git(folder, ["worktree", "add", "--no-track", "-b", branch, path, base]);
-    if (r.code === 0) return { folder: path, branch, vars };
+    if (r.code === 0) return { folder: path, branch, vars, reused: false };
     if (await isTaken(branch, path)) continue;
     throw new Error(out({ stdout: r.stderr }) || "git worktree add failed");
   }
   throw new Error(`Branch ${wanted} and its -N variants are all taken`);
+}
+
+async function checkoutExisting(project, slugText, log) {
+  const folder = projectFolder(project);
+  const { worktree: w, git: g } = project;
+  await inspect(folder);
+  await fetchRemote(folder, g, log);
+  const branch = slugText.trim();
+  if (!branch || (await git(folder, ["check-ref-format", "--branch", branch])).code !== 0) throw new Error(`"${branch}" is not a valid branch name`);
+  const vars = await templateVars(project, slugText);
+  const path = expandHome(expand(w.root, { ...vars, branch }), home());
+  if (await exists(path)) {
+    const r = await git(folder, ["worktree", "list", "--porcelain"]);
+    const held = r.code === 0 ? parseWorktrees(r.stdout).find((x) => x.path === path) : undefined;
+    if (held?.branch === branch) return { folder: path, branch, vars, reused: true };
+    throw new Error(`${path} already holds a worktree on ${held ? held.branch ?? "a detached HEAD" : "an unknown checkout"}`);
+  }
+  let args;
+  if ((await git(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) {
+    log(`git worktree add ${branch} (existing)…`);
+    args = ["worktree", "add", path, branch];
+  } else if ((await git(folder, ["rev-parse", "--verify", "--quiet", `refs/remotes/${g.remote}/${branch}`])).code === 0) {
+    log(`tracking ${g.remote}/${branch}…`);
+    args = ["worktree", "add", "--track", "-b", branch, path, `${g.remote}/${branch}`];
+  } else throw new Error(`branch "${branch}" not found locally or on ${g.remote}`);
+  const r = await git(folder, args);
+  if (r.code !== 0) throw new Error(out({ stdout: r.stderr }) || "git worktree add failed");
+  return { folder: path, branch, vars, reused: false };
 }
 
 /** The main checkout, brought up to date when fast-forward is on and that's safe. */
