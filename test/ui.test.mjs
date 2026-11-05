@@ -2019,10 +2019,39 @@ test("launch props: Esc without backTo returns to the list with the banner", asy
   enter(v);
   assert.equal(v.mode, "launch"); assert.equal(v.nameInput.value(), "me/sc-1/x");
 });
+test("launch props: a missing existing branch comes back to the launch screen with New branch chosen; Enter creates it", async () => {
+  const dir = realpathSync(makeRepo());
+  const p = proj("Api", dir, { worktree: { root: `${scratch("pp-wt")}/{branch}` } });
+  const { v, cx } = await open([p], null, { detail: false }, { launch: { v: 1, branch: "me/sc-1/x", checkout: "existing", prompt: "Read sc-1", repo: { names: ["api"] } } });
+  v.promptBox.set_value("Read sc-1, carefully");
+  v.launchNow(); await cx.settle();
+  assert.equal(v.mode, "launch"); assert.equal(v.launch.existing, false); assert.equal(v.launch.verbatim, true);
+  assert.equal(v.nameInput.value(), "me/sc-1/x"); assert.equal(v.promptBox.value(), "Read sc-1, carefully");
+  assert.match(texts(v), /branch "me\/sc-1\/x" not found locally or on origin/); assert.match(texts(v), /Enter creates it/);
+  assert.match(texts(v), /Existing branch/); assert.match(texts(v), /New branch/);
+  assert.match(texts(v), /branch: me\/sc-1\/x/);
+  v.launchNow(); await cx.settle();
+  assert.equal(v.error, null); assert.equal(state.closed, 1);
+  assert.equal(sh(dir, "rev-parse", "--verify", "--quiet", "refs/heads/me/sc-1/x").length, 40);
+});
+test("launch props: the Branch row of a request offers Existing / New, and the choice drives the checkout", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "feat/z");
+  const p = proj("Api", dir, { worktree: { root: `${scratch("pp-wt")}/{branch}` } });
+  const { v, cx } = await open([p], null, { detail: false }, { launch: { v: 1, branch: "feat/z", checkout: "existing", repo: { names: ["api"] } } });
+  assert.match(texts(v), /Existing branch/);
+  clickId(v, cx, "pp-branch-new"); await cx.settle();
+  assert.equal(v.launch.existing, false); assert.match(texts(v), /from origin\/main/);
+  clickId(v, cx, "pp-branch-existing"); await cx.settle();
+  assert.equal(v.launch.existing, true); assert.match(texts(v), /checks out the existing branch feat\/z/);
+  // An ordinary launch (no request) shows no such choice.
+  const plain = await open([p], null, { detail: false });
+  enter(plain.v);
+  assert.equal(plain.v.mode, "launch"); assert.doesNotMatch(texts(plain.v), /Existing branch/);
+});
 test("launch props: a failed launch, then Esc, shows the banner again", async () => {
   const { v, cx } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "x", checkout: "existing", repo: { names: ["api"] } } });
   v.launchNow(); await cx.settle();
-  assert.equal(v.mode, "busy"); assert.match(v.error, /branch "x" not found locally or on origin/);
+  assert.equal(v.mode, "launch"); assert.match(texts(v), /branch "x" not found locally or on origin/);
   pushCommand("escape"); await cx.settle();
   assert.equal(v.mode, "list"); assert.equal(state.closed, 0);
   assert.match(texts(v), /Starting x: pick a project/);

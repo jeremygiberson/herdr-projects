@@ -156,7 +156,7 @@ async function checkoutExisting(project, slugText, log) {
   } else if ((await git(folder, ["rev-parse", "--verify", "--quiet", `refs/remotes/${g.remote}/${branch}`])).code === 0) {
     log(`tracking ${g.remote}/${branch}…`);
     args = ["worktree", "add", "--track", "-b", branch, path, `${g.remote}/${branch}`];
-  } else throw new Error(`branch "${branch}" not found locally or on ${g.remote}`);
+  } else throw Object.assign(new Error(`branch "${branch}" not found locally or on ${g.remote}`), { code: "missing-branch" }); // the picker offers to create it
   const r = await git(folder, args);
   if (r.code !== 0) throw new Error(out({ stdout: r.stderr }) || "git worktree add failed");
   return { folder: path, branch, vars, reused: false };

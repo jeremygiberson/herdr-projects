@@ -145,7 +145,8 @@ test("existing: remote-only branch is tracked", async () => {
   const wt = await G.createWorktree(project(dir, { git: { fetch: true, remote: "origin" } }), "feat/remote", note, { existing: true });
   assert.equal(sh(wt.folder, "rev-parse", "--abbrev-ref", "feat/remote@{upstream}"), "origin/feat/remote");
   const off = project(realpathSync(makeClone().dir), { git: { fetch: false } });
-  await assert.rejects(G.createWorktree(off, "feat/none", note, { existing: true }), /branch "feat\/none" not found locally or on origin/);
+  // The launcher offers to create such a branch: the error names its kind.
+  await assert.rejects(G.createWorktree(off, "feat/none", note, { existing: true }), (e) => /branch "feat\/none" not found locally or on origin/.test(e.message) && e.code === "missing-branch");
 });
 test("existing: a worktree already on that branch is reused", async () => {
   const dir = realpathSync(makeRepo()); sh(dir, "branch", "feat/two");

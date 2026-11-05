@@ -67,6 +67,8 @@ The branch is used exactly as given, with or without a slash; editing it in the 
 
 With `checkout: "existing"` the picker checks out the local branch, or tracks `<remote>/<branch>` if only the remote has it. It never adds a `-N` suffix. If a worktree is already on that branch (wherever it is) it is reused, and its open space is selected instead of making a new one. A branch that is checked out in the project's main checkout is refused.
 
+The launch screen of a request has an **Existing branch / New branch** choice above the branch box (the request's `checkout` picks the default). When an existing branch is found neither locally nor on the remote, the launch comes back to that screen with New branch chosen and the message under the box, the name and prompt untouched: Enter then creates the branch from the project's base.
+
 `launch.name` is ignored: the project's space-name template decides the space name.
 
 When `backTo` is given, Esc on the launch screen or on the project list closes the picker and reopens that mod with the given props; alt+b (⌘⌥B) on the launch screen goes to the project list instead, to pick another project. Without `backTo`, Esc on the launch screen goes back to the project list. Back on the list the banner shows again and picking a project prefills the launch screen, until a launch succeeds. Esc reaches the picker through the `mod:projects` section of `keys.json` (see Install), so that section must be merged for `backTo` to work.

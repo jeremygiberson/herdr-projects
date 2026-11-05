@@ -555,7 +555,9 @@ export default class ProjectPresets extends View {
     this.mode = "launch";
     this.error = null;
     // verbatim: the branch box holds a launch request's branch, used as is (not fed to the template) until it is edited.
-    this.launch = { worktree: prefill ? true : !mainOnly && p.worktree.mode !== "never", agentTiming: p.startup.agentTiming, existing: false, verbatim: false };
+    // fromRequest: the Branch row offers Existing / New (an ordinary launch is always a new branch).
+    this.launch = { worktree: prefill ? true : !mainOnly && p.worktree.mode !== "never", agentTiming: p.startup.agentTiming, existing: false, verbatim: false, fromRequest: Boolean(prefill) };
+    this.missing = null;
     this.nameInput = null;
     this.preview = "";
     if (this.launch.worktree) this.makeNameInput();
@@ -578,6 +580,7 @@ export default class ProjectPresets extends View {
     this.nameInput.on("change", (_e, cx) => {
       // An edit of a prefilled branch makes it ordinary text again (the template applies without a slash).
       if (this.launch.verbatim && this.nameInput.value() !== this.launch.verbatimText) this.launch.verbatim = false;
+      this.missing = null; // the "not found" message was about the name before the edit
       this.refreshPreview(cx);
     });
     this.nameInput.on("submit", () => this.launchNow());
@@ -589,6 +592,22 @@ export default class ProjectPresets extends View {
     this.launch.worktree = worktree;
     if (worktree && !this.nameInput) this.makeNameInput();
     else if (worktree) this.refreshPreview(this.cx);
+  }
+
+  /** Existing branch or New branch, on the launch screen of a request. */
+  setBranchMode(existing) {
+    this.launch.existing = existing;
+    this.missing = null;
+    this.refreshPreview(this.cx);
+  }
+
+  /** An existing branch that is nowhere to be found: back to the launch screen with New branch chosen, the name and
+   *  prompt as they were, so Enter creates it. */
+  offerNewBranch(message) {
+    this.mode = "launch";
+    this.launch.existing = false;
+    this.missing = message;
+    this.refreshPreview(this.cx);
   }
 
   /** Whether this launch runs setup commands, so the agent can start after them. */
@@ -670,6 +689,7 @@ export default class ProjectPresets extends View {
         this.launched();
       } catch (e) {
         logError("open project", e);
+        if (e.code === "missing-branch" && this.launch) return this.offerNewBranch(e.message);
         this.error = e.message;
         cx.notify();
       }
@@ -1639,8 +1659,12 @@ export default class ProjectPresets extends View {
         .child(this.button(t, "pp-open-worktree", "Worktree", l.worktree, openAs(true)))
         .child(this.button(t, "pp-open-checkout", "Checkout", !l.worktree, openAs(false)))))
       .when(l.worktree && Boolean(this.nameInput), (el) => el.child(row("Branch", v_flex().gap(4)
+        .when(l.fromRequest || Boolean(this.missing), (el) => el.child(h_flex().gap(8).pb(2)
+          .child(this.button(t, "pp-branch-existing", "Existing branch", l.existing, () => { this.setBranchMode(true); cx.notify(); }))
+          .child(this.button(t, "pp-branch-new", "New branch", !l.existing, () => { this.setBranchMode(false); cx.notify(); }))))
         .child(h_flex().h(36).px(10).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
           .child(Input.new(this.nameInput).flex_1().h_full().text_size(12.8).text_color(t.foreground)))
+        .when(Boolean(this.missing), (el) => el.child(div().text_size(12).text_color(t.blocked).child(`${this.missing}. New branch is chosen: Enter creates it from ${p.git.remote}/${p.git.base}.`)))
         .child(div().text_size(12).text_color(this.error ? t.blocked : t.dim).child(this.error ?? (this.preview ? `branch: ${this.preview}` : "")))
         .child(note(l.existing ? `checks out the existing branch ${this.nameInput.value()} (local or ${p.git.remote}/…) · Enter launches` : `from ${p.git.remote}/${p.git.base}${p.git.fetch ? " after a fetch" : ""} · Enter launches`)))))
       .child(row("Prompt", v_flex().gap(4)
