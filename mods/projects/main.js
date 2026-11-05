@@ -13,7 +13,7 @@ import { prepareSetup } from "./setup.js";
 import { readDemo } from "./demo.js";
 import { initLog, log, logError } from "./log.js";
 import { Watcher } from "./watch.js";
-import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, migrateLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, setupScript, inUserShell, shq, fallbackAgent, badEnvLines } from "./lib.js";
+import { fuzzy, blankProject, blankPane, shortHome, splitList, joinList, basename, allLayouts, nextLayout, fuzzyPositions, highlightRuns, commandName, agentOptions, ago, listItems, layoutRects, enterAction, spaceColor, defaultTemplate, duplicateProject, startFromTemplate, expandHome, exportData, parseBackup, mergeProjects, mergeLayouts, exportFileName, withLauncherBlocks, migrateLauncherBlocks, tabsForLaunch, firstAgent, tabLabels, tabPlan, spaceShows, setupSummary, exportsPrefix, setupScript, inUserShell, shq, fallbackAgent, badEnvLines, parseLaunch, resolveLaunchProject, launchBanner } from "./lib.js";
 
 const RECENT = "projects.recent";
 const EXPORT_DIR = "~/Downloads";
@@ -136,6 +136,15 @@ export default class ProjectPresets extends View {
     this.at = 0;
     this.error = null;
     this.notes = [];
+    // A launch request from another mod (props().launch): applied once the list has loaded (see reload).
+    this.pending = null;
+    this.banner = null;
+    this.backTo = props()?.backTo ?? null;
+    const rawLaunch = props()?.launch;
+    if (rawLaunch) {
+      const r = parseLaunch(rawLaunch);
+      if (r.ok) this.pending = r.launch; else this.error = r.error;
+    }
     this.handle = cx.focus_handle();
 
     this.search = InputState.new({ placeholder: "Open a project…" });
@@ -186,6 +195,11 @@ export default class ProjectPresets extends View {
         this.error = e.message;
       }
       if (after) await after();
+      if (this.pending && !this.banner && !this.error && this.mode === "list") {
+        const r = resolveLaunchProject(this.projects, this.pending, homeOf());
+        if (r.project) this.openPending(r.project);
+        else this.banner = launchBanner(this.pending);
+      }
       cx.notify();
       // Branch, changed files and worktrees per project: on unless "gitInfo": false is in the data file (it runs git in every
       // project each time the picker opens).
@@ -471,6 +485,14 @@ export default class ProjectPresets extends View {
     return row.children(highlightRuns(name, at).map((r) => r.hit ? div().font_bold().text_color(t.accent).child(r.text) : div().child(r.text)));
   }
 
+  /** Opens the launch screen for the pending launch request, prefilled, then forgets the request. */
+  openPending(p) {
+    const l = this.pending;
+    this.pending = null;
+    this.banner = null;
+    this.openLaunch(p, { prefill: { branch: l.branch, prompt: l.prompt, existing: l.checkout === "existing" } });
+  }
+
   /** Enter (mainOnly false) opens the launch screen on a new worktree (a checkout for a `never` project); Shift+Enter
    *  opens it on the checkout. A quickLaunch project skips the screen unless it would ask for a branch name. */
   activate(mainOnly) {
@@ -479,22 +501,29 @@ export default class ProjectPresets extends View {
     const p = r.p;
     if (p.template) return this.duplicateSelected(); // a template has no folder to open: Enter makes a project from it
     this.target = p;
+    if (this.pending) return this.openPending(p);
     if (p.quickLaunch && (mainOnly || p.worktree.mode !== "ask")) return this.start(p, { worktree: !mainOnly && p.worktree.mode !== "never" });
     this.openLaunch(p, { mainOnly });
   }
 
   /** The launch screen: open as worktree or checkout, branch, first prompt, agent timing, layout. Makes host
    *  objects, so it runs from an event, never from render. */
-  openLaunch(p, { mainOnly = false } = {}) {
+  openLaunch(p, { mainOnly = false, prefill = null } = {}) {
     this.target = p;
     this.mode = "launch";
     this.error = null;
-    this.launch = { worktree: !mainOnly && p.worktree.mode !== "never", agentTiming: p.startup.agentTiming };
+    this.launch = { worktree: prefill ? true : !mainOnly && p.worktree.mode !== "never", agentTiming: p.startup.agentTiming, existing: false };
     this.nameInput = null;
     this.preview = "";
     if (this.launch.worktree) this.makeNameInput();
     this.promptBox = TextareaState.new({ placeholder: "First prompt (optional)", value: this.leadPane(p)?.prompt ?? "", rows: 3 });
     this.promptBox.set_auto_grow(3, 8);
+    if (prefill) {
+      this.nameInput.set_value(prefill.branch);
+      if (prefill.prompt != null) this.promptBox.set_value(prefill.prompt);
+      this.launch.existing = prefill.existing;
+      this.refreshPreview(this.cx);
+    }
     // No `submit` handler: the box fires it on every Enter, which also types a newline. ctrl+Enter launches (see keys).
     (this.nameInput ?? this.promptBox).focus();
   }
@@ -526,6 +555,7 @@ export default class ProjectPresets extends View {
       branchText: this.launch.worktree ? (this.nameInput?.value() ?? "") : "",
       prompt: this.promptBox.value().trim(),
       agentTiming: this.launchHasSetup() ? this.launch.agentTiming : "with",
+      existing: this.launch.existing,
     });
   }
 
@@ -549,7 +579,7 @@ export default class ProjectPresets extends View {
     cx?.notify();
   }
 
-  start(p, { worktree, branchText = "", prompt = this.leadPane(p)?.prompt ?? "", agentTiming = p.startup.agentTiming, pick = this.layoutNameFor(p) } = {}) {
+  start(p, { worktree, branchText = "", prompt = this.leadPane(p)?.prompt ?? "", agentTiming = p.startup.agentTiming, pick = this.layoutNameFor(p), existing: checkout = false } = {}) {
     this.mode = "busy";
     this.notes = [];
     this.error = null;
@@ -565,7 +595,14 @@ export default class ProjectPresets extends View {
           this.dismiss();
           return run("space.select", { id: existing.id });
         }
-        const { folder, name, chain, steps, env, marker } = await this.prepareLaunch(p, { worktree, branchText }, log);
+        const { folder, name, chain, steps, env, marker, reused } = await this.prepareLaunch(p, { worktree, branchText, existing: checkout }, log);
+        if (reused) {
+          const open = spaces().find((s) => !s.machine && s.folder === folder);
+          if (open) {
+            this.dismiss();
+            return run("space.select", { id: open.id });
+          }
+        }
         const quick = p.startup.quickSetup;
         if (quick && await runInline(steps, folder, env, log) && marker) {
           try {
@@ -592,16 +629,16 @@ export default class ProjectPresets extends View {
 
   /** The worktree (created, copied into, chained) or the prepared checkout: { folder, name, chain, steps, env, marker }
    *  (see prepareSetup). */
-  async prepareLaunch(p, { worktree, branchText }, log) {
+  async prepareLaunch(p, { worktree, branchText, existing = false }, log) {
     const main = projectFolder(p);
     if (!worktree) {
       await prepareMain(p, log);
       const setup = await prepareSetup({ project: p, folder: main, isWorktree: false, branch: (await inspect(main)).branch, repo: basename(main), home: home(), log });
       return { folder: main, name: p.name, ...setup };
     }
-    const wt = await createWorktree(p, branchText, log);
+    const wt = await createWorktree(p, branchText, log, { existing });
     const setup = await prepareSetup({ project: p, folder: wt.folder, isWorktree: true, branch: wt.branch, repo: wt.vars.repo, home: home(), log });
-    return { folder: wt.folder, name: worktreeSpaceName(p, wt), ...setup };
+    return { folder: wt.folder, name: worktreeSpaceName(p, wt), reused: wt.reused, ...setup };
   }
 
   // ---- editor -----------------------------------------------------------
@@ -1475,6 +1512,7 @@ export default class ProjectPresets extends View {
       .child(h_flex().h(36).flex_none().px(10).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
         .child(Input.new(this.search).flex_1().h_full().text_size(12.8).text_color(t.foreground))
         .child(div().text_size(11).text_color(t.dim).child(`${rows.length} of ${this.allProjects().length}`)))
+      .child(this.banner ? div().text_size(12).text_color(t.accent).child(this.banner) : div())
       .child(this.renderToolbar(t, cx, rows))
       .child(this.error ? div().text_size(12).text_color(t.blocked).child(this.error) : div())
       .child(h_flex().gap(14).items_start().min_h(0)
@@ -1544,7 +1582,7 @@ export default class ProjectPresets extends View {
         .child(h_flex().h(36).px(10).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
           .child(Input.new(this.nameInput).flex_1().h_full().text_size(12.8).text_color(t.foreground)))
         .child(div().text_size(12).text_color(this.error ? t.blocked : t.dim).child(this.error ?? (this.preview ? `branch: ${this.preview}` : "")))
-        .child(note(`from ${p.git.remote}/${p.git.base}${p.git.fetch ? " after a fetch" : ""} · Enter launches`)))))
+        .child(note(l.existing ? `checks out the existing branch ${this.nameInput.value()} (local or ${p.git.remote}/…) · Enter launches` : `from ${p.git.remote}/${p.git.base}${p.git.fetch ? " after a fetch" : ""} · Enter launches`)))))
       .child(row("Prompt", v_flex().gap(4)
         .child(div().px(10).py(6).rounded(9).border_1().border_color(t.input).bg(t.background)
           .child(Textarea.new(this.promptBox).w_full().text_size(12.8).text_color(t.foreground)))

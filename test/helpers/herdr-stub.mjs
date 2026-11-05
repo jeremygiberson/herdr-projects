@@ -40,10 +40,11 @@ export const state = {
   notified: [],         // every notify(...)
   machines: undefined,  // what machines() reports; undefined: this computer, its layout ready
   screen: undefined,    // what `hc read` prints; undefined: a bare "$ " prompt
+  overlays: [],         // every openOverlay(spec)
 };
 
 export function reset() {
-  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], machines: undefined, screen: undefined, layoutNames: undefined, closed: 0, platform: "linux", picked: null, props: undefined });
+  Object.assign(state, { spaces: [], focused: null, terminals: [], foreground: "claude", runs: [], sent: [], agentStatus: "idle", nextId: 1, sendFails: false, hangNextLs: false, splits: [], splitFails: false, tabsMade: [], appLsHidesSpaces: false, hcRuns: [], labeledTabs: [], hcRunHidesTab: false, renames: [], hcRunFails: false, agents: [], panes: [], notified: [], machines: undefined, screen: undefined, layoutNames: undefined, closed: 0, platform: "linux", picked: null, props: undefined, overlays: [] });
   for (const k of Object.keys(store)) delete store[k];
 }
 
@@ -51,6 +52,7 @@ export const home = () => { count("home"); return state.home; };
 export const appHome = () => state.appHome;
 // A space has one tab with one pane and lives on this machine unless a test says otherwise.
 export const spaces = () => { count("spaces"); return state.spaces.map((s) => ({ machine: null, tabs: [{ id: `tb-${s.id}`, name: "1", panes: 1 }], ...s })); };
+export const openOverlay = (spec) => { state.overlays.push(spec); };
 export const agents = () => state.agents;
 export const panes = () => state.panes;
 export const machines = () => state.machines ?? [{ name: null, layout: "ready" }];

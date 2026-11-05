@@ -22,8 +22,9 @@ const enter = (v) => (v.mode === "launch" ? v.launchNow() : v.search.emit("submi
 const CTRL_ALT = { control: true, alt: true };
 
 /** A picker with these projects (and layouts) in its data file, loaded and rendered once. */
-async function open(projects, layouts, opts = { detail: true }) {
+async function open(projects, layouts, opts = { detail: true }, props = {}) {
   reset();
+  state.props = { overlay: "ov1", ...props };
   if ("detail" in opts) setShared("projects.detail", opts.detail);
   mkdirSync(`${state.appHome}/data`, { recursive: true });
   writeFileSync(dataFile(), JSON.stringify({ ...(layouts ? { layouts } : {}), ...("gitInfo" in opts ? { gitInfo: opts.gitInfo } : {}), ...(opts.template ? {} : { hideTemplate: true }), projects }, null, 2));
@@ -1895,4 +1896,42 @@ test("the card tags an auto-layout project and hints when the Projects button is
   assert.doesNotMatch(texts(v), /needs the Projects button/);
   setShared("projects.launcher", "off");
   assert.match(texts(v), /needs the Projects button in the layout \(Launcher: off\)/);
+});
+
+test("launch props: one matching project opens the launch screen prefilled", async () => {
+  const dir = makeRepo();
+  const { v } = await open([proj("Api", dir)], null, { detail: false }, { launch: { v: 1, branch: "me/sc-1/x", prompt: "Read sc-1", source: { kind: "shortcut", id: "sc-1" }, repo: { names: ["api"] } } });
+  assert.equal(v.mode, "launch");
+  assert.equal(v.nameInput.value(), "me/sc-1/x");
+  assert.equal(v.promptBox.value(), "Read sc-1");
+  assert.equal(v.launch.existing, false);
+  assert.match(texts(v), /branch: me\/sc-1\/x/);
+});
+test("launch props: no match shows the list with the banner, and picking a project prefills", async () => {
+  const dir = makeRepo();
+  const { v } = await open([proj("Api", dir), proj("Web", makeRepo())], null, { detail: false }, { launch: { v: 1, branch: "me/x", checkout: "existing" } });
+  assert.equal(v.mode, "list");
+  assert.match(texts(v), /Starting me\/x: pick a project/);
+  v.at = 1; enter(v);
+  assert.equal(v.mode, "launch"); assert.equal(v.target.name, "Web");
+  assert.equal(v.launch.existing, true);
+  assert.match(texts(v), /checks out the existing branch me\/x/);
+});
+test("launch props: an unknown version is refused with a banner in red", async () => {
+  const { v } = await open([proj("Api", makeRepo())], null, { detail: false }, { launch: { v: 7, branch: "b" } });
+  assert.equal(v.mode, "list");
+  assert.equal(v.error, "Unknown launch request version 7");
+});
+test("a reused worktree with an open space selects it", async () => {
+  const dir = realpathSync(makeRepo()); sh(dir, "branch", "feat/x");
+  const p = proj("Api", dir, { worktree: { root: `${scratch("pp-wt")}/{branch}` } });
+  const launch = { v: 1, branch: "feat/x", checkout: "existing", repo: { names: ["Api"] } };
+  const { v, cx } = await open([p], null, { detail: false }, { launch });
+  v.launchNow(); await cx.settle();
+  const folder = state.runs.find((r) => r.command === "space.new").args.folder;
+  const again = await open([p], null, { detail: false }, { launch });
+  state.spaces.push({ id: "s9", folder, machine: null, tabs: [] });
+  again.v.launchNow(); await again.cx.settle();
+  assert.deepEqual(again.v.error, null);
+  assert.deepEqual(state.runs.map((r) => [r.command, r.args.id]), [["space.select", "s9"]]);
 });
